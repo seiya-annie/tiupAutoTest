@@ -1,0 +1,5 @@
+Flask
+docker
+mysql-connector-python
+packaging
+requests

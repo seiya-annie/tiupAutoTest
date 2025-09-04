@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TiDB 版本测试平台</title>
+    <style>
+        body { font-family: sans-serif; margin: 2em; }
+        .container { display: flex; gap: 2em; }
+        .form-section, .result-section { flex: 1; }
+        label { display: block; margin-top: 1em; }
+        textarea, select { width: 100%; min-height: 100px; }
+        select { min-height: 200px; }
+        button { margin-top: 1em; padding: 0.5em 1em; cursor: pointer; }
+        #results { background-color: #f0f0f0; border: 1px solid #ccc; padding: 1em; min-height: 300px; white-space: pre-wrap; font-family: monospace; }
+        .success { color: green; }
+        .failure { color: red; }
+
+
+    </style>
+</head>
+<body>
+<h1>TiDB 版本回归测试</h1>
+<div class="container">
+    <div class="form-section">
+        <form id="test-form">
+            <label for="tidb-versions">选择 TiDB 版本 (可多选):</label>
+            <select id="tidb-versions" multiple required>
+                {% for version in versions %}
+                <option value="{{ version }}">{{ version }}</option>
+                {% endfor %}
+            </select>
+
+            <label for="sql-query">测试用例 (SQL 语句):</label>
+            <textarea id="sql-query" rows="5">SELECT 1;</textarea>
+
+            <label for="expected-result">预期结果:</label>
+            <textarea id="expected-result" rows="3">[(1,)]</textarea>
+
+            <button type="button" id="start-test-btn">开始测试</button>
+            <button type="button" id="auto-locate-btn">自动定位 Bug</button>
+            <button type="button" id="clean-env-btn">清理环境</button>
+        </form>
+    </div>
+    <div class="result-section">
+        <label>执行结果:</label>
+        <div id="results">等待测试开始...</div>
+    </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>

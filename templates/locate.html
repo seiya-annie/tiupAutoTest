@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>自动定位 Bug</title>
+    <style>
+        body { font-family: sans-serif; margin: 2em; }
+        .container { display: flex; gap: 2em; }
+        .form-section, .result-section { flex: 1; }
+        label { display: block; margin-top: 1em; }
+        textarea, input { width: 100%; }
+        textarea { min-height: 100px; }
+        input { padding: 0.5em; }
+        button { margin-top: 1em; padding: 0.5em 1em; cursor: pointer; }
+        #results { background-color: #f0f0f0; border: 1px solid #ccc; padding: 1em; min-height: 300px; white-space: pre-wrap; font-family: monospace; }
+
+
+    </style>
+</head>
+<body>
+<h1>自动定位 Bug 版本</h1>
+<a href="/">&lt;&lt; 返回首页</a>
+<div class="container">
+    <div class="form-section">
+        <form id="locate-form">
+            <label for="bug-version">Bug 上报版本:</label>
+            <input type="text" id="bug-version" placeholder="输入一个已知的执行结果错误的版本" required>
+
+            <label for="start-version">起始版本 (可选):</label>
+            <input type="text" id="start-version" placeholder="输入二分查找的起始版本，默认 v5.4.0">
+
+            <label for="sql-query">测试用例 (SQL):</label>
+            <textarea id="sql-query" rows="5"></textarea>
+
+            <label for="expected-result">预期结果:</label>
+            <textarea id="expected-result" rows="3"></textarea>
+
+            <button type="button" id="start-locate-btn">开始定位</button>
+            <button type="button" id="clean-env-btn">清理环境</button>
+        </form>
+    </div>
+    <div class="result-section">
+        <label>执行结果:</label>
+        <div id="results">等待定位开始...</div>
+    </div>
+</div>
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
