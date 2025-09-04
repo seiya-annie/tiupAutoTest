@@ -158,7 +158,7 @@ def test_single_version(version, sql, expected_result, task_id, index):
         }
 
     except docker.errors.ImageNotFound as e:
-        error_msg = f"Docker 镜像 hawkingrei/tidb-playground:{version} 不存在。"
+        error_msg = f"Docker 镜像 tidb-playground:latest 不存在。"
         tasks[task_id]['log'].append(f"版本 {version}: {error_msg}")
         result_data = {'version': version, 'status': '失败', 'error': error_msg}
     except Exception as e:
