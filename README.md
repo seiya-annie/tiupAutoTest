@@ -1,3 +1,57 @@
-Two ways to start:
-1. python app.py
-2. flask run --host=0.0.0.0
+# TiDB Bug Locator & Regression Test Platform
+This tool helps developers and testers to quickly locate bugs in TiDB and run regression tests across multiple versions.
+
+本工具旨在帮助开发者和测试人员快速定位 TiDB 代码中的 Bug，并进行多版本回归测试。它通过一个直观的 Web 界面，自动化地调用 tiup playground 来完成集群的创建、测试和销毁。
+
+## ✨ Features (主要功能)
+* Multi-Version Testing (多版本测试): Concurrently run regression tests against multiple TiDB versions by launching isolated tiup playground clusters.
+
+* Automatic Bug Bisection (自动定位 Bug): Given a known faulty version, the tool uses a binary search algorithm to automatically pinpoint the exact version that introduced the bug.
+
+## 🚀 Getting Started
+### Prerequisites (准备工作)
+Before you begin, ensure you have the following installed:
+
+* Python 3.8+
+
+* Python Dependencies: From the project root directory, run:
+
+```pip install -r requirements.txt```
+
+### Running the Application (运行代码)
+You can start the web service in one of two ways:
+
+#### Option 1: Direct Execution
+
+```python app.py```
+
+#### Option 2: Using the Flask Command
+
+Set the FLASK_APP environment variable first
+```export FLASK_APP=app.py```
+
+Then, run the application
+```flask run --host=0.0.0.0```
+
+# 💻 Usage (使用方法)
+Once the server is running, open your web browser and navigate to:
+
+http://127.0.0.1:5001
+
+From the homepage, you can select one or more TiDB versions for regression testing.
+
+Enter your SQL query and the expected result.
+
+Click "Start Test" to begin.
+
+To find a specific bug, click "Auto Locate Bug" to navigate to the bisection page.
+
+Always use the "Clean Environment" button after your tests to terminate all running tiup processes and remove log files for your session.
+
+# 🔧 (Optional) Using a Custom Docker Image
+If you can not pull the image in app.py, you can self-compiled a TiDB tiup playground running image, you can use the provided Dockerfile to build a custom image. After building, you will need to modify the app.py script to use your new image name.
+
+# 🤝 Contributing
+Contributions are welcome! Please feel free to submit a Pull Request or open an issue for any bugs or feature requests.
+
+
