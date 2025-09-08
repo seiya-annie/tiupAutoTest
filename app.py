@@ -88,7 +88,7 @@ def run_sql_on_tidb(sql, port):
         conn.close()
         return result.strip(), True
     except mysql.connector.Error as err:
-        return f"SQL 执行错误: {err}", False
+        return str(err), False
 
 
 def test_single_version(version, sql, expected_result, task_id, index):
@@ -111,7 +111,7 @@ def test_single_version(version, sql, expected_result, task_id, index):
         image_name = f'hub.pingcap.net/qa/tidb-playground:latest'
         container = docker_client.containers.run(
             image_name,
-            ["--db.host", "0.0.0.0", "--tiflash", "0", "--db.config", "/root/.tiup/config.toml", f"{version}"],
+            ["--db.host", "0.0.0.0", "--db.config", "/root/.tiup/config.toml", f"{version}", "--without-monitor", "--kv", "3", "--tiflash", "1"],
             detach=True,
             ports={'4000/tcp': sql_port, '2379/tcp': dashboard_port},
             remove=True  # 设置 docker 在容器停止时自动删除
@@ -141,9 +141,7 @@ def test_single_version(version, sql, expected_result, task_id, index):
 
         actual_result, success = run_sql_on_tidb(sql, sql_port)
 
-        if not success:
-            status = "执行失败"
-        elif ''.join(expected_result.split()) in ''.join(actual_result.split()):
+        if ''.join(expected_result.split()) in ''.join(actual_result.split()):
             status = "成功"
         else:
             status = "失败"
@@ -289,7 +287,7 @@ def run_binary_search(start_v_str, end_v_str, sql, expected, task_id):
             time.sleep(0.1)
             result_data = tasks[task_id]['results'][result_index]
 
-            if result_data.get('status') == '失败' and 'error' not in result_data:
+            if result_data.get('status') == '失败':
                 first_bad_version = version_to_test
                 high = mid_idx - 1
             elif result_data.get('status') == '成功':
