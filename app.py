@@ -73,6 +73,7 @@ def run_sql_on_tidb(sql, port):
             user='root',
             password='',
             database='test',
+            autocommit=True,
             connection_timeout=20
         )
         cursor = conn.cursor()
