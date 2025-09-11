@@ -10,6 +10,37 @@ from packaging.version import Version
 import mysql.connector
 import sys
 
+TIDB_GO_VERSION_MAP = {
+    "4.0": "1.13.15",
+    "5.0": "1.13.15",
+    "5.1": "1.16.15",
+    "5.2": "1.16.15",
+    "5.3": "1.16.15",
+    "5.4": "1.16.15",
+    "6.0": "1.18.10",
+    "6.1": "1.18.10",
+    "6.2": "1.18.10",
+    "6.3": "1.19.13",
+    "6.4": "1.19.13",
+    "6.5": "1.19.13",
+    "6.6": "1.19.13",
+    "7.0": "1.20.14",
+    "7.1": "1.20.14",
+    "7.2": "1.20.14",
+    "7.3": "1.20.14",
+    "7.4": "1.21.13",
+    "7.5": "1.21.13",
+    "7.6": "1.21.13",
+    "8.0": "1.21.13",
+    "8.1": "1.21.13",
+    "8.2": "1.21.13",
+    "8.3": "1.21.13",
+    "8.4": "1.23.6",
+    "8.5": "1.23.6",
+    # 您可以根据需要继续添加新的版本映射
+}
+DEFAULT_GO_VERSION = "1.25.1"
+
 # --- 配置 ---
 app = Flask(__name__)
 # 用于 session 加密，请在生产环境中替换为更复杂的密钥
@@ -24,32 +55,59 @@ TIDB_BINARY_PATH = "bin/tidb-server"
 COMPILE_COMMAND = "make"
 TIDB_REPO_PATH = '/Users/lt/git/tidb'
 
+
 # --- commit 二分查找函数 --
-def run_command(command, work_dir=".", shell=False, check=True):
+def run_command(command, work_dir=".", shell=False, check=True, print_output=False):
     """一个通用的命令执行函数，实时打印输出"""
     print(f"🚀 在 '{work_dir}' 中执行: {' '.join(command) if isinstance(command, list) else command}")
+
+    if isinstance(command, list):
+        # 将列表命令安全地拼接成字符串
+        command_str = ' '.join(f"'{arg}'" if ' ' in arg else arg for arg in command)
+    else:
+        command_str = command
+
+    asdf_script_path = os.path.expanduser("~/.asdf/asdf.sh")
+    if not os.path.exists(asdf_script_path):
+        print(f"❌ 错误: asdf 环境脚本未在 '{asdf_script_path}' 找到。")
+        sys.exit(1)
+    # 使用 bash -c '...' 来确保在一个 shell 中先 source 再执行命令
+    final_command = f". {asdf_script_path} && {command_str}"
+    final_command_list = ["/bin/bash", "-li", "-c", final_command]
+
+    if print_output:
+        print(f"🚀 (In Bash with ASDF Env) 在 '{work_dir}' 中执行: {final_command}")
+
     try:
         process = subprocess.Popen(
-            command,
+            final_command_list,
             cwd=work_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            shell=shell
+            shell=shell,
+            preexec_fn=os.setsid if sys.platform != "win32" else None
         )
 
-        output_lines = []
-        for line in iter(process.stdout.readline, ''):
-            sys.stdout.write(line)
-            output_lines.append(line)
+        output_lines, full_output = [], ""
+        if print_output:
+            for line in iter(process.stdout.readline, ''):
+                sys.stdout.write(line)
+                output_lines.append(line)
+            full_output = "".join(output_lines)
 
         process.wait()
 
+        if not print_output:
+            full_output = process.stdout.read()
+
         if check and process.returncode != 0:
+            print("compile fail:", process.stderr)
             raise subprocess.CalledProcessError(process.returncode, command)
 
-        return "".join(output_lines)
+        return full_output
     except FileNotFoundError:
+        command_name = command[0] if isinstance(command, list) else command.split()[0]
         print(f"❌ 命令未找到: {command[0]}. 请确保它已安装并在您的 PATH 中。")
         sys.exit(1)
 
@@ -83,11 +141,28 @@ def get_commit_list(start_tag, end_tag,task_id):
     return [c for c in commits if c] # 过滤空行
 
 
-def compile_at_commit(commit_sha,task_id):
+def compile_at_commit(commit_sha,task_id, version):
     """Checkout 到指定 commit 并进行编译"""
     tasks[task_id]['log'].append(f"\n🔧 切换到 commit: {commit_sha[:8]} 并开始编译...")
     try:
+        version_key = ".".join(version.lstrip('v').split('.')[:2])
+        go_version = TIDB_GO_VERSION_MAP.get(version_key, DEFAULT_GO_VERSION)
+
+        if version_key not in TIDB_GO_VERSION_MAP:
+            print(f"⚠️ 警告: 在版本映射中未找到 '{version_key}'。将使用默认 Go 版本: {DEFAULT_GO_VERSION}")
+
         run_command(["git", "checkout", commit_sha], work_dir=TIDB_REPO_PATH)
+
+        print(f"⚙️ 正在为 TiDB 版本 '{version_key}' 设置 Go 版本为: {go_version}...")
+        run_command(["asdf", "local", "go", go_version], work_dir=TIDB_REPO_PATH)
+
+        # 验证 Go 版本是否切换成功
+        print("Verifying Go version...")
+        run_command(["go", "version"], work_dir=TIDB_REPO_PATH)
+    except Exception as e:
+        print(f"❌ 设置 Go 版本时出错: {e}。将使用环境中已有的 Go 版本继续尝试。")
+
+    try:
         # 编译 TiDB server
         run_command(COMPILE_COMMAND.split(), work_dir=TIDB_REPO_PATH)
 
@@ -168,6 +243,7 @@ def test_single_version(version, sql, expected_result, task_id, index, cleanup_a
     log_dir = "logs"
     os.makedirs(log_dir, exist_ok=True)
     log_filename = f"{log_dir}/task_{task_id[:8]}_{version}.log"
+    # print("testcase:",sql)
 
     if commit != '':
         log_message = f"commit {commit}: 准备启动集群 (端口偏移: {port_offset}, SQL Port: {sql_port})..."
@@ -289,6 +365,7 @@ def start_test():
     data = request.json
     selected_versions = data.get('versions', [])
     sql = data.get('sql')
+    print("testcase:",sql)
     expected_result = data.get('expected')
 
     task_id = str(uuid4())
@@ -336,10 +413,10 @@ def run_binary_search(start_v_str, end_v_str, sql, expected, task_id):
             commit_sha = commits[mid]
 
             tasks[task_id]['log'].append(f"\n--- 正在测试第 {mid + 1}/{len(commits)} 个 commit: {commit_sha[:12]} ---")
-            binary_path = compile_at_commit(commit_sha, task_id)
+            binary_path = compile_at_commit(commit_sha, task_id, end_version)
             if binary_path is None:
                 print(f"👎 [BAD] Commit {commit_sha[:12]} 编译失败。")
-                first_bad_commit = commit_sha
+                # first_bad_commit = commit_sha
                 high = mid - 1
                 continue
             result_index = len(tasks[task_id]['results'])
@@ -416,6 +493,7 @@ def run_binary_search(start_v_str, end_v_str, sql, expected, task_id):
             start_v_str = "v5.4.1"
 
     found_version = binary_search_logic(start_v_str, end_v_str)
+    tasks[task_id]['log'].append(f"\n----定位到第一个出错的版本是: {found_version}----")
     tasks[task_id][
         'final_result'] = f"定位到第一个出错的版本是: {found_version}" if found_version else f"在 {start_v_str}-{end_v_str} 范围内未找到不符合预期的版本。"
 
