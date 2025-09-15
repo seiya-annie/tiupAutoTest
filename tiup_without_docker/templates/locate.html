@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>自动定位 Bug</title>
+    <title data-i18n="locateTitle">自动定位 Bug</title>
     <style>
         body { font-family: sans-serif; margin: 2em; background-color: #f4f7f6; color: #333; }
         h1 { color: #0b4f6c; }
@@ -10,144 +10,310 @@
         .container { display: flex; gap: 2em; }
         .form-section, .result-section { flex: 1; background-color: #fff; padding: 1.5em; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         label { display: block; margin-top: 1em; font-weight: bold; }
-        textarea, input { width: 100%; padding: 0.5em; border: 1px solid #ccc; border-radius: 4px; }
-        button { margin-top: 1em; padding: 0.7em 1.2em; cursor: pointer; border: none; border-radius: 4px; background-color: #0b4f6c; color: white; font-size: 1em; }
+        textarea, input { width: 100%; padding: 0.5em; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        button { margin-top: 1.5em; padding: 0.7em 1.2em; cursor: pointer; border: none; border-radius: 4px; background-color: #0b4f6c; color: white; font-size: 1em; }
         button:hover { background-color: #012a36; }
         button:disabled { background-color: #ccc; cursor: not-allowed; }
         #results { background-color: #2d3748; color: #f7fafc; border: 1px solid #ccc; padding: 1em; min-height: 300px; white-space: pre-wrap; font-family: monospace; border-radius: 4px; overflow-x: auto; }
         .failure { color: #f56565; }
+        .lang-switcher { position: absolute; top: 1em; right: 2em; }
+
+        .mode-selector {
+            display: flex;
+            align-items: center;
+            gap: 0.5em; /* 单选按钮和其标签之间的间距 */
+            margin-top: 0.5em; /* 主标签下方的间距 */
+        }
+        .mode-selector label {
+            margin-top: 0;
+            font-weight: normal; /* 单选按钮的标签不加粗 */
+        }
+        /* 在第一个选项后增加一个较大的右边距，以分隔两个选项 */
+        .mode-selector label[for="mode-version"] {
+            margin-right: 1.5em;
+        }
+        /* 覆盖全局的 input 样式，使单选按钮宽度自适应 */
+        .mode-selector input[type="radio"] {
+            width: auto;
+        }
+        .component-counts { display: flex; gap: 1em; align-items: center; flex-wrap: wrap; }
+        .component-counts label { margin-top: 0; white-space: nowrap; font-weight: normal; }
+        .component-counts input { width: 60px; }
+        .input-group { border: 1px solid #e2e8f0; border-radius: 6px; padding: 1em; margin-top: 1em; }
+        .input-group label { margin-top: 0.5em; }
+        .hidden { display: none; } /* 用于隐藏/显示输入框组 */
     </style>
 </head>
 <body>
-    <h1>自动定位 Bug 版本</h1>
-    <a href="/">&lt;&lt; 返回首页</a>
+    <div class="lang-switcher">
+        <button id="lang-zh">中文</button>
+        <button id="lang-en">English</button>
+    </div>
+
+    <h1 data-i18n="locateTitle">自动定位 Bug</h1>
+    <a href="/" data-i18n="backToHome">&lt;&lt; 返回首页</a>
     <div class="container">
         <div class="form-section">
             <form id="locate-form">
-                <label for="bug-version">Bug 上报版本:</label>
-                <input type="text" id="bug-version" placeholder="输入一个已知的执行结果错误的版本" required>
-                <label for="start-version">起始版本 (可选):</label>
-                <input type="text" id="start-version" placeholder="输入二分查找的起始版本，默认 v5.4.0">
-                <label for="sql-query">测试用例 (SQL):</label>
-                <textarea id="sql-query" rows="5"></textarea>
-                <label for="expected-result">预期结果:</label>
-                <textarea id="expected-result" rows="3"></textarea>
-                <button type="button" id="start-locate-btn">开始定位</button>
-                <button type="button" id="clean-env-btn">清理环境</button>
+                <!-- 定位模式选择 -->
+                <label data-i18n="locateModeLabel">定位模式:</label>
+                <div class="mode-selector">
+                    <input type="radio" id="mode-version" name="locate-mode" value="version" checked>
+                    <label for="mode-version" data-i18n="modeVersionLabel">按版本范围</label>
+                    <input type="radio" id="mode-commit" name="locate-mode" value="commit">
+                    <label for="mode-commit" data-i18n="modeCommitLabel">按 Commit 范围</label>
+                </div>
+
+                <!-- 按版本范围的输入框 -->
+                <div id="version-inputs" class="input-group">
+                    <label for="bug-version" data-i18n="bugVersionLabel">Bug 上报版本:</label>
+                    <input type="text" id="bug-version" data-i18n-placeholder="bugVersionPlaceholder" required>
+                    <label for="start-version" data-i18n="startVersionLabel">起始版本 (可选):</label>
+                    <input type="text" id="start-version" data-i18n-placeholder="startVersionPlaceholder">
+                </div>
+
+                <!-- 按 Commit 范围的输入框 -->
+                <div id="commit-inputs" class="input-group hidden">
+                    <label for="tidb-branch" data-i18n="tidbBranchLabel">TiDB 分支:</label>
+                    <input type="text" id="tidb-branch" data-i18n-placeholder="tidbBranchPlaceholder" required>
+                    <label for="start-commit" data-i18n="startCommitLabel">起始 Commit:</label>
+                    <input type="text" id="start-commit" data-i18n-placeholder="startCommitPlaceholder" required>
+                    <label for="end-commit" data-i18n="endCommitLabel">结束 Commit:</label>
+                    <input type="text" id="end-commit" data-i18n-placeholder="endCommitPlaceholder" required>
+                </div>
+
+                <!-- 公共参数 -->
+                <div class="input-group">
+                    <label data-i18n="componentsLabel">组件个数:</label>
+                    <div class="component-counts">
+                        <label for="tidb-count" data-i18n="tidbLabel">TiDB:</label>
+                        <input type="number" id="tidb-count" value="1" min="0">
+                        <label for="tikv-count" data-i18n="tikvLabel">TiKV:</label>
+                        <input type="number" id="tikv-count" value="1" min="0">
+                        <label for="pd-count" data-i18n="pdLabel">PD:</label>
+                        <input type="number" id="pd-count" value="1" min="0">
+                        <label for="tiflash-count" data-i18n="tiflashLabel">TiFlash:</label>
+                        <input type="number" id="tiflash-count" value="0" min="0">
+                    </div>
+                </div>
+
+                <div class="input-group">
+                    <label for="sql-query" data-i18n="testCaseLabel">测试用例 (SQL):</label>
+                    <textarea id="sql-query" rows="5"></textarea>
+                    <label for="expected-result" data-i18n="expectedResultLabel">预期结果:</label>
+                    <textarea id="expected-result" rows="3"></textarea>
+                </div>
+
+                <button type="button" id="start-locate-btn" data-i18n="startLocateBtn">开始定位</button>
+                <button type="button" id="clean-env-btn" data-i18n="cleanEnvBtn">清理环境</button>
             </form>
         </div>
         <div class="result-section">
-            <label>执行结果:</label>
-            <div id="results">等待定位开始...</div>
+            <label data-i18n="executionResultsLabel">执行结果:</label>
+            <div id="results" data-i18n-placeholder="waitingForLocate">等待定位开始...</div>
         </div>
     </div>
 <script>
-// The JS logic is identical to index.html, so it's duplicated for simplicity.
-// In a real app, this would be a shared JS file.
-document.addEventListener('DOMContentLoaded', function() {
-    const resultBox = document.getElementById('results');
-    let pollInterval;
+const translations = {};
+let currentLang = localStorage.getItem('lang') || (navigator.language.startsWith('en') ? 'en' : 'zh');
 
-    function disableButtons(state) {
-        document.querySelectorAll('button').forEach(b => b.disabled = state);
+async function setLanguage(lang) {
+    if (!translations[lang]) {
+        try {
+            const response = await fetch(`/locales/${lang}.json`);
+            if (!response.ok) throw new Error(`Failed to load language file: ${response.statusText}`);
+            translations[lang] = await response.json();
+        } catch (error) {
+            console.error(`Could not set language to ${lang}:`, error);
+            return;
+        }
     }
+    localStorage.setItem('lang', lang);
+    currentLang = lang;
+    document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en-US';
+    translatePage();
+}
 
-    // Copy-paste the pollStatus and updateResults functions from index.html here...
-    function pollStatus(taskId) {
-        if (pollInterval) clearInterval(pollInterval);
-        pollInterval = setInterval(async () => {
-            try {
-                const response = await fetch(`/status/${taskId}`);
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                const data = await response.json();
-                updateResults(data);
-                if (['complete', 'error', 'not_found'].includes(data.status)) {
-                    clearInterval(pollInterval);
-                    disableButtons(false);
-                }
-            } catch (error) {
-                resultBox.innerHTML += `\nPolling failed: ${error.message}`;
+function translatePage() {
+    const langPack = translations[currentLang];
+    if (!langPack) return;
+    document.querySelectorAll('[data-i18n]').forEach(element => {
+        const key = element.getAttribute('data-i18n');
+        if (langPack[key]) element.textContent = langPack[key];
+    });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(element => {
+        const key = element.getAttribute('data-i18n-placeholder');
+        if (langPack[key]) element.placeholder = langPack[key];
+    });
+    const titleElement = document.querySelector('title[data-i18n]');
+    if (titleElement) {
+        const key = titleElement.getAttribute('data-i18n');
+        if (langPack[key]) document.title = langPack[key];
+    }
+}
+
+
+// --- 应用程序核心逻辑 ---
+const resultBox = document.getElementById('results');
+let pollInterval;
+
+function disableButtons(state) {
+    document.querySelectorAll('button').forEach(b => b.disabled = state);
+}
+function pollStatus(taskId) {
+    if (pollInterval) clearInterval(pollInterval);
+    localStorage.setItem('activeLocateTaskId', taskId);
+    pollInterval = setInterval(async () => {
+        try {
+            const response = await fetch(`/status/${taskId}`);
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            const data = await response.json();
+            updateResults(data);
+            if (['complete', 'error', 'not_found'].includes(data.status)) {
                 clearInterval(pollInterval);
                 disableButtons(false);
+                localStorage.removeItem('activeLocateTaskId');
             }
-        }, 3000);
-    }
-
-    function updateResults(data) {
-        let content = `<strong>任务状态: ${data.status}</strong>\n\n`;
-        content += "<strong>日志:</strong>\n" + data.log.join('\n') + '\n\n';
-        if (data.results && data.results.length > 0) {
-             content += "<strong>测试详情:</strong>\n";
-             data.results.forEach(res => {
-                 if (Object.keys(res).length === 0) return;
-                 content += `---------------------------------\n`;
-                 content += `版本: ${res.version}\n`;
-                 const statusClass = res.status === '成功' ? 'success' : 'failure';
-                 content += `状态: <span class="${statusClass}">${res.status}</span>\n`;
-                 if (res.log_file) {
-                     content += `日志文件: ${res.log_file}\n`;
-                 }
-		 if (res.error) content += `错误: ${res.error}\n`;
-                 else {
-                     content += `SQL Port: ${res.sql_port}, Dashboard Port: ${res.dashboard_port}\n`;
-                     content += `预期: ${res.expected}\n`;
-                     content += `实际: ${res.actual}\n`;
-                 }
-             });
+        } catch (error) {
+            resultBox.innerHTML += `\nPolling failed: ${error.message}`;
+            clearInterval(pollInterval);
+            disableButtons(false);
+            localStorage.removeItem('activeLocateTaskId');
         }
-        if (data.type === 'locate' && data.status === 'complete' && data.final_result) {
-            content += `\n\n<strong>--- 最终定位结果 ---</strong>\n<strong class="failure">${data.final_result}</strong>\n`;
-        }
-        resultBox.innerHTML = content.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        resultBox.innerHTML = resultBox.innerHTML.replace(/&lt;span class="success"&gt;/g, '<span class="success">').replace(/&lt;span class="failure"&gt;/g, '<span class="failure">').replace(/&lt;\/span&gt;/g, '</span>').replace(/&lt;strong&gt;/g, '<strong>').replace(/&lt;\/strong&gt;/g, '</strong>');
-    }
-    // ... end of copy-paste
+    }, 3000);
+}
 
-    if (localStorage.getItem('sqlQuery') && localStorage.getItem('sqlQuery') !== 'SELECT 1;') {
+function updateResults(data) {
+    let content = `<strong>Task Status: ${data.status}</strong>\n\n`;
+    content += "<strong>Log:</strong>\n" + data.log.join('\n') + '\n\n';
+    if (data.results && data.results.length > 0) {
+         content += "<strong>Test Details:</strong>\n";
+         data.results.forEach(res => {
+             if (Object.keys(res).length === 0) return;
+             content += `---------------------------------\n`;
+             content += `Version: ${res.version}\n`;
+             const statusClass = res.status === 'Success' ? 'success' : 'failure';
+             content += `Status: <span class="${statusClass}">${res.status}</span>\n`;
+             if (res.log_file) content += `Log File: ${res.log_file}\n`;
+             if (res.error) content += `Error: ${res.error}\n`;
+             else {
+                 content += `SQL Port: ${res.sql_port}, Dashboard Port: ${res.dashboard_port}\n`;
+                 content += `Expected: ${res.expected}\n`;
+                 content += `Actual: ${res.actual}\n`;
+             }
+         });
+    }
+    if (data.type === 'locate' && data.status === 'complete' && data.final_result) {
+        content += `\n\n<strong>--- Final Result ---</strong>\n<strong class="failure">${data.final_result}</strong>\n`;
+    }
+    resultBox.innerHTML = content.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    resultBox.innerHTML = resultBox.innerHTML.replace(/&lt;span class="success"&gt;/g, '<span class="success">').replace(/&lt;span class="failure"&gt;/g, '<span class="failure">').replace(/&lt;\/span&gt;/g, '</span>').replace(/&lt;strong&gt;/g, '<strong>').replace(/&lt;\/strong&gt;/g, '</strong>');
+}
+
+async function cleanEnvironment(btn) {
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    btn.textContent = 'Cleaning...';
+    resultBox.textContent += '\n\nStarting environment cleanup...';
+    try {
+        const response = await fetch('/clean', { method: 'POST' });
+        const data = await response.json();
+        let msg = `\nCleanup complete. Terminated ${data.cleaned_pids.length} processes.`;
+        if (data.errors.length > 0) msg += `\nErrors: ${data.errors.join(', ')}`;
+        resultBox.textContent += msg;
+    } catch (error) {
+        resultBox.textContent += `\nCleanup failed: ${error.message}`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
+}
+// --- 页面加载完成后的主逻辑 ---
+document.addEventListener('DOMContentLoaded', function() {
+    setLanguage(currentLang);
+    document.getElementById('lang-zh').addEventListener('click', () => setLanguage('zh'));
+    document.getElementById('lang-en').addEventListener('click', () => setLanguage('en'));
+
+    const activeTaskId = localStorage.getItem('activeLocateTaskId');
+    if (activeTaskId) {
+        resultBox.textContent = 'Resuming status check for a previous task...';
+        disableButtons(true);
+        pollStatus(activeTaskId);
+    }
+    if (localStorage.getItem('sqlQuery')) {
         document.getElementById('sql-query').value = localStorage.getItem('sqlQuery');
     }
-    if (localStorage.getItem('expectedResult') && localStorage.getItem('expectedResult') !== '[(1,)]') {
+    if (localStorage.getItem('expectedResult')) {
         document.getElementById('expected-result').value = localStorage.getItem('expectedResult');
     }
 
-    document.getElementById('start-locate-btn').addEventListener('click', async () => {
-        const bug_version = document.getElementById('bug-version').value;
-        if (!bug_version) {
-            alert('请填写“Bug 上报版本”'); return;
+    const modeVersionRadio = document.getElementById('mode-version');
+    const modeCommitRadio = document.getElementById('mode-commit');
+    const versionInputs = document.getElementById('version-inputs');
+    const commitInputs = document.getElementById('commit-inputs');
+
+    function toggleInputs() {
+        if (modeVersionRadio.checked) {
+            versionInputs.classList.remove('hidden');
+            commitInputs.classList.add('hidden');
+        } else {
+            versionInputs.classList.add('hidden');
+            commitInputs.classList.remove('hidden');
         }
+    }
+    modeVersionRadio.addEventListener('change', toggleInputs);
+    modeCommitRadio.addEventListener('change', toggleInputs);
+    toggleInputs();
+
+    document.getElementById('start-locate-btn').addEventListener('click', async () => {
+        const locateMode = document.querySelector('input[name="locate-mode"]:checked').value;
+        const payload = {
+            locate_mode: locateMode,
+            sql: document.getElementById('sql-query').value,
+            expected: document.getElementById('expected-result').value,
+            tidb: document.getElementById('tidb-count').value,
+            tikv: document.getElementById('tikv-count').value,
+            pd: document.getElementById('pd-count').value,
+            tiflash: document.getElementById('tiflash-count').value,
+        };
+
+        if (locateMode === 'version') {
+            payload.bug_version = document.getElementById('bug-version').value;
+            payload.start_version = document.getElementById('start-version').value;
+            if (!payload.bug_version) {
+                alert(translations[currentLang]?.bugVersionAlert || 'Please fill in the "Bug Reported Version".');
+                return;
+            }
+        } else {
+            payload.branch = document.getElementById('tidb-branch').value;
+            payload.start_commit = document.getElementById('start-commit').value;
+            payload.end_commit = document.getElementById('end-commit').value;
+            if (!payload.branch || !payload.start_commit || !payload.end_commit) {
+                alert(translations[currentLang]?.commitFieldsAlert || 'Please fill in all commit-related fields.');
+                return;
+            }
+        }
+
         disableButtons(true);
-        resultBox.textContent = '定位任务已提交，正在初始化...';
+        resultBox.textContent = translations[currentLang]?.waitingForLocate || 'Location task submitted, initializing...';
 
         const response = await fetch('/start_locate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                bug_version,
-                start_version: document.getElementById('start-version').value,
-                sql: document.getElementById('sql-query').value,
-                expected: document.getElementById('expected-result').value
-            })
+            body: JSON.stringify(payload)
         });
         const data = await response.json();
         if (data.error) {
-            resultBox.textContent = `启动失败: ${data.error}`;
+            resultBox.textContent = `Failed to start: ${data.error}`;
             disableButtons(false);
         } else if (data.task_id) {
             pollStatus(data.task_id);
         }
     });
 
-    document.getElementById('clean-env-btn').addEventListener('click', async (e) => {
-        e.target.disabled = true;
-        e.target.textContent = '清理中...';
-        resultBox.textContent += '\n\n开始清理环境...';
-        const response = await fetch('/clean', { method: 'POST' });
-        const data = await response.json();
-        let msg = `\n清理完成。 终止了 ${data.cleaned_pids.length} 个进程。`;
-        if (data.errors.length > 0) msg += `\n错误: ${data.errors.join(', ')}`;
-        resultBox.textContent += msg;
-        e.target.disabled = false;
-        e.target.textContent = '6. 清理环境';
+    // 【修复】为“清理环境”按钮绑定事件
+    document.getElementById('clean-env-btn').addEventListener('click', (e) => {
+        cleanEnvironment(e.target);
     });
 });
 </script>
