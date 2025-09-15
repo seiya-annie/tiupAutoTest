@@ -5,7 +5,7 @@ import time
 import json
 import threading
 from uuid import uuid4
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, send_from_directory
 from packaging.version import Version
 import mysql.connector
 import sys
@@ -36,10 +36,17 @@ TIDB_GO_VERSION_MAP = {
     "8.2": "1.21.13",
     "8.3": "1.21.13",
     "8.4": "1.23.6",
-    "8.5": "1.23.6",
+    "8.5": "1.25.1",
     # 您可以根据需要继续添加新的版本映射
 }
 DEFAULT_GO_VERSION = "1.25.1"
+
+COMPONENT_COUNTS = {
+    'tidb': 1,
+    'tikv': 1,
+    'pd': 1,
+    'tiflash': 0
+}
 
 # --- 配置 ---
 app = Flask(__name__)
@@ -126,34 +133,41 @@ def get_commit_list(start_tag, end_tag,task_id):
 
     except IndexError:
         tasks[task_id]['log'].append(f"⚠️ 警告: 无法从 tag '{end_tag}' 推断出标准的 release 分支名。跳过 checkout。")
+        return
     except subprocess.CalledProcessError:
         tasks[task_id]['log'].append(f"⚠️ 警告: 切换到分支 '{branch_name}' 失败。该分支可能在本地不存在。")
         tasks[task_id]['log'].append("继续尝试直接使用 tag 进行 commit 查找...")
+        return
 
-    command = ["git", "rev-list", "--reverse", f"{start_tag}...{end_tag}"]
-    output = run_command(command, TIDB_REPO_PATH)
-    tasks[task_id]['log'].append(f"\n🔍 获取 {start_tag}..{end_tag} 之间的 commit 列表...")
-    # --reverse 参数让 commit 从旧到新排列，符合二分查找的逻辑顺序
-    command = ["git", "rev-list", "--reverse", f"{start_tag}...{end_tag}"]
-    output = run_command(command, TIDB_REPO_PATH)
-    commits = output.strip().split('\n')
-    tasks[task_id]['log'].append(f"✅ 找到 {len(commits)} 个 commits。")
-    return [c for c in commits if c] # 过滤空行
-
+    try:
+        command = ["git", "rev-list", "--reverse", f"{start_tag}...{end_tag}"]
+        output = run_command(command, TIDB_REPO_PATH)
+        tasks[task_id]['log'].append(f"\n🔍 获取 {start_tag}..{end_tag} 之间的 commit 列表...")
+        # --reverse 参数让 commit 从旧到新排列，符合二分查找的逻辑顺序
+        commits = output.strip().split('\n')
+        tasks[task_id]['log'].append(f"✅ 找到 {len(commits)} 个 commits。")
+        return [c for c in commits if c] # 过滤空行
+    except Exception as e:
+        tasks[task_id]['log'].append(f"❌ get commits list fail")
+        # 在二分查找中，编译失败通常被视为 "bad" commit
+        return None
 
 def compile_at_commit(commit_sha,task_id, version):
     """Checkout 到指定 commit 并进行编译"""
     tasks[task_id]['log'].append(f"\n🔧 切换到 commit: {commit_sha[:8]} 并开始编译...")
     try:
-        version_key = ".".join(version.lstrip('v').split('.')[:2])
-        go_version = TIDB_GO_VERSION_MAP.get(version_key, DEFAULT_GO_VERSION)
+        if version == 'master':
+            go_version = DEFAULT_GO_VERSION
+        else:
+            version_key = ".".join(version.lstrip('v').split('.')[:2])
+            go_version = TIDB_GO_VERSION_MAP.get(version_key, DEFAULT_GO_VERSION)
 
-        if version_key not in TIDB_GO_VERSION_MAP:
-            print(f"⚠️ 警告: 在版本映射中未找到 '{version_key}'。将使用默认 Go 版本: {DEFAULT_GO_VERSION}")
+            if version_key not in TIDB_GO_VERSION_MAP:
+                print(f"⚠️ 警告: 在版本映射中未找到 '{version_key}'。将使用默认 Go 版本: {DEFAULT_GO_VERSION}")
 
         run_command(["git", "checkout", commit_sha], work_dir=TIDB_REPO_PATH)
 
-        print(f"⚙️ 正在为 TiDB 版本 '{version_key}' 设置 Go 版本为: {go_version}...")
+        print(f"⚙️ 正在为 TiDB 版本 '{version}' 设置 Go 版本为: {go_version}...")
         run_command(["asdf", "local", "go", go_version], work_dir=TIDB_REPO_PATH)
 
         # 验证 Go 版本是否切换成功
@@ -161,6 +175,7 @@ def compile_at_commit(commit_sha,task_id, version):
         run_command(["go", "version"], work_dir=TIDB_REPO_PATH)
     except Exception as e:
         print(f"❌ 设置 Go 版本时出错: {e}。将使用环境中已有的 Go 版本继续尝试。")
+        return
 
     try:
         # 编译 TiDB server
@@ -195,6 +210,8 @@ def get_tidb_versions():
             if line.strip().startswith('v') and 'Available versions' not in line and '---' not in line:
                 version = line.split()[0]
                 if all(c in 'v0123456789.' for c in version):
+                    if len(version) <= 4:
+                        continue
                     versions.append(version)
         versions.sort(key=Version, reverse=True)
         # versions.insert(0, "nightly")
@@ -243,7 +260,7 @@ def test_single_version(version, sql, expected_result, task_id, index, cleanup_a
     log_dir = "logs"
     os.makedirs(log_dir, exist_ok=True)
     log_filename = f"{log_dir}/task_{task_id[:8]}_{version}.log"
-    # print("testcase:",sql)
+    tasks[task_id]['log'].append(f"task_id: {task_id[:8]}")
 
     if commit != '':
         log_message = f"commit {commit}: 准备启动集群 (端口偏移: {port_offset}, SQL Port: {sql_port})..."
@@ -254,16 +271,23 @@ def test_single_version(version, sql, expected_result, task_id, index, cleanup_a
 
     process = None
     log_file = None
+    tidb_number = COMPONENT_COUNTS['tidb']
+    tikv_number = COMPONENT_COUNTS['tikv']
+    pd_number = COMPONENT_COUNTS['pd']
+    tiflash_number = COMPONENT_COUNTS['tiflash']
     try:
         log_file = open(log_filename, 'w', encoding='utf-8')
         if commit != '':
             binary_full_path = os.path.join(TIDB_REPO_PATH, TIDB_BINARY_PATH)
-            cmd = ['tiup', 'playground', f'--db.binpath={binary_full_path}', version, f'--port-offset={port_offset}', '--without-monitor',"--kv", "3", "--tiflash", "1"]
-            print("install use a binary")
+            cmd = ['tiup', 'playground', f'--db.binpath={binary_full_path}', version, f'--port-offset={port_offset}',
+                   '--without-monitor','--kv', f'{tikv_number}', '--tiflash', f'{tiflash_number}',
+                   '--pd', f'{pd_number}', '--db',f'{tidb_number}' ]
+            print("install binary cmd:", cmd)
         else:
-            cmd = ['tiup', 'playground', version, f'--port-offset={port_offset}', '--without-monitor', "--kv", "3",
-                   "--tiflash", "1"]
-            # print("install use a version")
+            cmd = ['tiup', 'playground', version, f'--port-offset={port_offset}', '--without-monitor',
+                   '--kv', f'{tikv_number}', '--tiflash', f'{tiflash_number}',
+                   '--pd', f'{pd_number}', '--db',f'{tidb_number}']
+            print("install version cmd:", cmd)
 
         # 使用 Popen 启动非阻塞的子进程
         process = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, text=True, encoding='utf-8')
@@ -313,9 +337,9 @@ def test_single_version(version, sql, expected_result, task_id, index, cleanup_a
         actual_result, success = run_sql_on_tidb(sql, sql_port)
 
         if ''.join(expected_result.split()) in ''.join(actual_result.split()):
-            status = "成功"
+            status = "Success"
         else:
-            status = "失败"
+            status = "Failure"
         if commit != '':
             version_commit = f"{version}-{commit}"
             result_data = {
@@ -331,7 +355,7 @@ def test_single_version(version, sql, expected_result, task_id, index, cleanup_a
     except Exception as e:
         error_msg = f"测试版本 {version} 时发生错误: {e}"
         tasks[task_id]['log'].append(error_msg)
-        result_data = {'version': version, 'status': '失败', 'error': str(e)}
+        result_data = {'version': version, 'status': 'Failure', 'error': str(e)}
     finally:
         # 在二分查找模式下，测试完一个版本就立即清理
         if log_file:
@@ -348,6 +372,11 @@ def test_single_version(version, sql, expected_result, task_id, index, cleanup_a
 
 
 # --- 路由 ---
+@app.route('/locales/<path:filename>')
+def serve_locales(filename):
+    """This route serves static files from the 'locales' directory."""
+    # Now that it's imported, this function call will work correctly.
+    return send_from_directory(os.path.join(app.root_path, 'locales'), filename)
 
 @app.route('/')
 def index():
@@ -356,17 +385,37 @@ def index():
 
 
 @app.route('/locate')
-def locate():
+def locate_page():
     return render_template('locate.html')
 
 
 @app.route('/start_test', methods=['POST'])
 def start_test():
+    global COMPONENT_COUNTS
+
     data = request.json
     selected_versions = data.get('versions', [])
     sql = data.get('sql')
     print("testcase:",sql)
     expected_result = data.get('expected')
+
+    tidb_count = int(data.get('tidb') or COMPONENT_COUNTS['tidb'])
+    tikv_count = int(data.get('tikv') or COMPONENT_COUNTS['tikv'])
+    pd_count = int(data.get('pd') or COMPONENT_COUNTS['pd'])
+    tiflash_count = int(data.get('tiflash') or COMPONENT_COUNTS['tiflash'])
+
+    COMPONENT_COUNTS = {
+        'tidb': tidb_count,
+        'tikv': tikv_count,
+        'pd': pd_count,
+        'tiflash': tiflash_count
+    }
+    print(f"[*] Global component counts have been updated to: {COMPONENT_COUNTS}")
+
+    print("收到定位任务请求:")
+    print(f"  - Bug 版本: {selected_versions}")
+    print(f"  - SQL: {sql}")
+    print(f"  - 预期结果: {expected_result}")
 
     task_id = str(uuid4())
     tasks[task_id] = {
@@ -379,7 +428,7 @@ def start_test():
 
     threads = []
     for i, version in enumerate(selected_versions):
-        thread = threading.Thread(target=test_single_version, args=(version, sql, expected_result, task_id, i, False))
+        thread = threading.Thread(target=test_single_version, args=(version, sql, expected_result, task_id, i, False, ''))
         threads.append(thread)
         thread.start()
 
@@ -393,7 +442,7 @@ def start_test():
     return jsonify({'task_id': task_id})
 
 
-def run_binary_search(start_v_str, end_v_str, sql, expected, task_id):
+def run_binary_search_with_version(start_v_str, end_v_str, sql, expected, task_id):
     """二分查找逻辑"""
     all_versions = get_tidb_versions()
 
@@ -427,10 +476,10 @@ def run_binary_search(start_v_str, end_v_str, sql, expected, task_id):
 
             result_data = tasks[task_id]['results'][result_index]
 
-            if result_data.get('status') == '失败':
+            if result_data.get('status') == 'Failure':
                 first_bad_commit = commit_sha
                 high = mid - 1
-            elif result_data.get('status') == '成功':
+            elif result_data.get('status') == 'Success':
                 low = mid + 1
             else:
                 tasks[task_id]['log'].append(f"版本 {commit_sha} 测试时发生环境错误，定位中止。")
@@ -463,10 +512,10 @@ def run_binary_search(start_v_str, end_v_str, sql, expected, task_id):
 
             result_data = tasks[task_id]['results'][result_index]
 
-            if result_data.get('status') == '失败':
+            if result_data.get('status') == 'Failure':
                 first_bad_version = version_to_test
                 high = mid_idx - 1
-            elif result_data.get('status') == '成功':
+            elif result_data.get('status') == 'Success':
                 low = mid_idx + 1
             else:
                 tasks[task_id]['log'].append(f"版本 {version_to_test} 测试时发生环境错误，定位中止。")
@@ -485,11 +534,11 @@ def run_binary_search(start_v_str, end_v_str, sql, expected, task_id):
         time.sleep(0.1)
         v540_result = tasks[task_id]['results'][0]
 
-        if v540_result.get('status') == '失败' and 'error' not in v540_result:
-            tasks[task_id]['log'].append("v5.4.0 上的结果已不符合预期，将在 v3.0.0 和 v5.3.0 之间查找。")
-            start_v_str = "v3.0.0"
+        if v540_result.get('status') == 'Failure' and 'error' not in v540_result:
+            tasks[task_id]['log'].append("v5.4.0 上的结果已不符合预期，将在 v4.0.0 和 v5.3.0 之间查找。")
+            start_v_str = "v4.0.0"
             end_v_str = "v5.3.0"
-        elif v540_result.get('status') == '成功':
+        elif v540_result.get('status') == 'Success':
             start_v_str = "v5.4.1"
 
     found_version = binary_search_logic(start_v_str, end_v_str)
@@ -503,25 +552,173 @@ def run_binary_search(start_v_str, end_v_str, sql, expected, task_id):
         found_commit = commit_binary_search_logic(tidb_versions[start_version_index], found_version)
         tasks[task_id][
             'final_result'] = f"定位到第一个出错的commit是: {found_version}-{found_commit}, " if found_commit else f"在 {start_v_str} 范围内未找到不符合预期的commit。"
+        if found_commit:
+            try:
+                output = run_command(["git", "show", found_commit, "--no-patch", ], work_dir=TIDB_REPO_PATH)
+                # tasks[task_id]['log'].append(f"✅ import issue and pr: {output}")
+                tasks[task_id][
+                    'final_result'] = f"定位到第一个出错的commit是: {found_version}-{found_commit}\n\nimport issue and pr: {output}, " if found_commit else f"在 {start_v_str} 范围内未找到不符合预期的commit。"
+
+            except RuntimeError as e:
+                print(e)
 
     tasks[task_id]['status'] = 'complete'
 
+def run_binary_search_with_commit(start_commit, end_commit, branch, sql, expected, task_id):
+    """二分查找逻辑"""
+
+    def commit_binary_search_logic(start_commit, end_commit, branch):
+        try:
+            print(f"[*] 正在切换到分支: {branch}")
+            subprocess.run(["git", "checkout", "-f", branch], cwd=TIDB_REPO_PATH, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"切换到分支 '{branch}' 失败: {e.stderr.strip()}")
+            return
+        command = ["git", "rev-list", "--reverse", f"{start_commit}..{end_commit}"]
+        try:
+            result = subprocess.run(
+                command,
+                cwd=TIDB_REPO_PATH,
+                check=True,
+                capture_output=True,
+                text=True
+            )
+
+            # 按换行符分割输出，并过滤掉可能的空行
+            commits_after_start = [line for line in result.stdout.strip().split('\n') if line]
+
+            # 将起始 commit 添加到列表的开头，构成完整的包含范围
+            commits = [start_commit] + commits_after_start
+
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"执行 'git rev-list' 失败: {e.stderr.strip()}")
+
+        if not commits:
+            print("在指定的 tag 范围内未找到任何 commit。")
+            return
+
+        tasks[task_id]['log'].append(f"开始在 {commits[0]} 到 {commits[-1]} 之间进行二分查找...")
+
+        low, high = 0, len(commits) - 1
+        first_bad_commit = None
+
+        while low <= high:
+            mid = (low + high) // 2
+            commit_sha = commits[mid]
+
+            tasks[task_id]['log'].append(f"\n--- 正在测试第 {mid + 1}/{len(commits)} 个 commit: {commit_sha[:12]} ---")
+            i_v = branch
+            if str(branch).find('release-') != -1:
+                i_v = str(branch).lstrip('release-') + '.0'
+
+            binary_path = compile_at_commit(commit_sha, task_id, i_v)
+            if binary_path is None:
+                print(f"👎 [BAD] Commit {commit_sha[:12]} 编译失败。")
+                # first_bad_commit = commit_sha
+                high = mid - 1
+                continue
+            result_index = len(tasks[task_id]['results'])
+            tasks[task_id]['results'].append({})  # 占位
+            # cleanup_after=True 表示测试完就清理
+            if branch == 'master':
+                install_version = 'nightly'
+            elif str(branch).find('release-')!= -1:
+                install_version = 'v' + str(branch).lstrip('release-') + '.0'
+            else:
+                tasks[task_id]['log'].append(f"branch format is incorrect")
+                return
+            test_single_version(install_version, sql, expected, task_id, result_index, cleanup_after=True,
+                                commit=commit_sha)
+
+            result_data = tasks[task_id]['results'][result_index]
+
+            if result_data.get('status') == 'Failure':
+                first_bad_commit = commit_sha
+                high = mid - 1
+            elif result_data.get('status') == 'Success':
+                low = mid + 1
+            else:
+                tasks[task_id]['log'].append(f"版本 {commit_sha} 测试时发生环境错误，定位中止。")
+                tasks[task_id]['status'] = 'error'
+                return None
+
+        return first_bad_commit
+
+    # 基线版本测试
+    found_commit = commit_binary_search_logic(start_commit, end_commit, branch)
+    if found_commit:
+        try:
+            output = run_command(["git", "show", found_commit, "--no-patch", ], work_dir=TIDB_REPO_PATH)
+            # tasks[task_id]['log'].append(f"✅ import issue and pr: {output}")
+
+        except RuntimeError as e:
+            print(e)
+    tasks[task_id][
+        'final_result'] = f"定位到第一个出错的commit是: {found_commit}\n\nimport issue and pr: {output}, " if found_commit else f"在 {branch} 范围内未找到不符合预期的commit。"
+
+    tasks[task_id]['status'] = 'complete'
 
 @app.route('/start_locate', methods=['POST'])
 def start_locate():
+    global COMPONENT_COUNTS
+
     data = request.json
-    bug_version = data.get('bug_version')
-    start_version_str = data.get('start_version') or "v5.4.0"
+    if not data:
+        return jsonify({'error': 'Invalid JSON payload'}), 400
+
+    locate_mode = data.get('locate_mode')
     sql = data.get('sql')
     expected_result = data.get('expected')
 
-    if not bug_version:
-        return jsonify({'error': '“bug 上报版本”不能为空'}), 400
-    try:
-        if Version(start_version_str) >= Version(bug_version):
-            return jsonify({'error': '“起始版本”不能等于或者晚于“bug 上报版本”'}), 400
-    except Exception:
-        return jsonify({'error': '版本号格式无效'}), 400
+    tidb_count = int(data.get('tidb') or COMPONENT_COUNTS['tidb'])
+    tikv_count = int(data.get('tikv') or COMPONENT_COUNTS['tikv'])
+    pd_count = int(data.get('pd') or COMPONENT_COUNTS['pd'])
+    tiflash_count = int(data.get('tiflash') or COMPONENT_COUNTS['tiflash'])
+
+    COMPONENT_COUNTS = {
+        'tidb': tidb_count,
+        'tikv': tikv_count,
+        'pd': pd_count,
+        'tiflash': tiflash_count
+    }
+    print(data)
+    # print(f"[*] Global component counts have been updated to: {COMPONENT_COUNTS}")
+
+    bug_version = start_version_str = branch = start_commit = end_commit = ''
+     # 根据不同模式解析并打印特定参数
+    if locate_mode == 'version':
+        bug_version = data.get('bug_version')
+        start_version_str = data.get('start_version') or "v5.4.0"
+        if not bug_version:
+            return jsonify({'error': 'bug_version is required for version mode'}), 400
+        try:
+            if Version(start_version_str) >= Version(bug_version):
+                return jsonify({'error': '“起始版本”不能等于或者晚于“bug 上报版本”'}), 400
+        except Exception:
+            return jsonify({'error': '版本号格式无效'}), 400
+        print("收到定位任务请求:")
+        print(f"  - locate mode: {locate_mode}")
+        print(f"  - start version: {start_version_str}")
+        print(f"  - end version: {bug_version}")
+        print(f"  - SQL: {sql}")
+        print(f"  - 预期结果: {expected_result}")
+    elif locate_mode == 'commit':
+        branch = data.get('branch')
+        if (branch != 'master') and (str(branch).find('release-') == -1) :
+            return jsonify({'error': 'branch format is incorrect, should be release-x.x'}), 400
+        start_commit = data.get('start_commit')
+        end_commit = data.get('end_commit')
+        if not all([branch, start_commit, end_commit]):
+            return jsonify({'error': 'branch, start_commit, and end_commit are required for commit mode'}), 400
+        print("收到定位任务请求:")
+        print(f"  - locate mode: {locate_mode}")
+        print(f"  - start commit: {start_commit}")
+        print(f"  - end commit: {end_commit}")
+        print(f"  - branch: {branch}")
+        print(f"  - SQL: {sql}")
+        print(f"  - 预期结果: {expected_result}")
+    else:
+        return jsonify({'error': f'Unknown locate_mode: {locate_mode}'}), 400
 
     task_id = str(uuid4())
     tasks[task_id] = {
@@ -531,14 +728,18 @@ def start_locate():
     session.setdefault('task_ids', []).append(task_id)
     session.modified = True
 
-    thread = threading.Thread(target=run_binary_search,
+    if locate_mode == 'version':
+        thread = threading.Thread(target=run_binary_search_with_version,
                               args=(start_version_str, bug_version, sql, expected_result, task_id))
+    elif locate_mode == 'commit':
+        thread = threading.Thread(target=run_binary_search_with_commit,
+                                  args=(start_commit, end_commit, branch, sql, expected_result, task_id))
     thread.start()
 
     return jsonify({'task_id': task_id})
 
 
-@app.route('/status/<task_id>')
+
 @app.route('/status/<task_id>')
 def task_status(task_id):
     """获取任务状态 (修正版)"""
@@ -600,7 +801,7 @@ def clean_env():
                 try:
                     pid = process.pid
                     process.terminate()
-                    process.wait(timeout=10)
+                    process.wait(timeout=30)
                     cleaned_pids.append(pid)
                 except Exception as e:
                     errors.append(f"清理进程 PID {pid} 失败: {e}")
