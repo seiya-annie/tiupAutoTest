@@ -6,41 +6,14 @@
     <style>
         body { font-family: sans-serif; margin: 2em; background-color: #f4f7f6; color: #333; }
         h1 { color: #0b4f6c; }
-        .top-nav {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 2em;
-            flex-wrap: wrap; /* Allow wrapping on small screens */
-            gap: 1em; /* Space between items */
-        }
-        .top-nav .lang-switcher { /* Adjust switcher position */
-            position: static;
-            top: auto;
-            right: auto;
-            margin-left: auto; /* Push switcher to the right */
-        }
-        .auto-locate-link {
-            display: inline-block; /* Make it behave like a block for padding/margin */
-            padding: 0.7em 1.2em;
-            cursor: pointer;
-            border: none;
-            border-radius: 4px;
-            background-color: #0b4f6c; /* Same as button color */
-            color: white;
-            font-size: 1em;
-            text-decoration: none; /* Remove underline */
-            text-align: center;
-            line-height: 1; /* Adjust line height for vertical alignment */
-            white-space: nowrap; /* Prevent text wrapping */
-        }
-        .auto-locate-link:hover {
-            background-color: #012a36;
-        }
+        .top-nav { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2em; flex-wrap: wrap; gap: 1em; }
+        .top-nav .lang-switcher { position: static; top: auto; right: auto; margin-left: auto; }
+        .auto-locate-link { display: inline-block; padding: 0.7em 1.2em; cursor: pointer; border: none; border-radius: 4px; background-color: #0b4f6c; color: white; font-size: 1em; text-decoration: none; text-align: center; line-height: 1; white-space: nowrap; }
+        .auto-locate-link:hover { background-color: #012a36; }
         .container { display: flex; gap: 2em; }
         .form-section, .result-section { flex: 1; background-color: #fff; padding: 1.5em; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         label { display: block; margin-top: 1em; font-weight: bold; }
-        textarea, select, input { width: 100%; padding: 0.5em; border: 1px solid #ccc; border-radius: 4px; }
+        textarea, select, input { width: 100%; padding: 0.5em; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
         select { min-height: 200px; }
         button { margin-top: 1em; padding: 0.7em 1.2em; cursor: pointer; border: none; border-radius: 4px; background-color: #0b4f6c; color: white; font-size: 1em; }
         button:hover { background-color: #012a36; }
@@ -49,19 +22,10 @@
         .success { color: #48bb78; }
         .failure { color: #f56565; }
         .lang-switcher { position: absolute; top: 1em; right: 2em; }
-        .component-counts {
-            display: flex;         /* 1. 使用 Flexbox 布局 */
-            gap: 1em;              /* 2. 在项目之间增加间距 */
-            align-items: center;   /* 3. 垂直居中对齐项目 */
-            flex-wrap: wrap;       /* 4. 在屏幕空间不足时允许换行 */
-        }
-        .component-counts label {
-            margin-top: 0;         /* 5. 移除标签的顶部外边距 */
-            white-space: nowrap;   /* 6. 防止标签文本换行 */
-        }
-        .component-counts input {
-            width: 60px;           /* 7. 给输入框一个固定的宽度 */
-        }
+        .component-counts { display: flex; gap: 1em; align-items: center; flex-wrap: wrap; }
+        .component-counts label { margin-top: 0; white-space: nowrap; }
+        .component-counts input { width: 60px; }
+        .input-group { border: 1px solid #e2e8f0; border-radius: 6px; padding: 1em; margin-top: 1em; }
     </style>
 </head>
 <body>
@@ -77,34 +41,42 @@
     <div class="container">
         <div class="form-section">
             <form id="test-form">
-                <label for="tidb-versions" data-i18n="selectVersion">Select the TiDB version (可多选):</label>
-                <select id="tidb-versions" multiple required>
-                    {% for version in versions %}
-                        <option value="{{ version }}">{{ version }}</option>
-                    {% endfor %}
-                </select>
-
-                <label data-i18n="componentsLabel">Number of Components:</label>
-                <div class="component-counts">
-                    <label for="tidb-count" data-i18n="tidbLabel">TiDB:</label>
-                    <input type="number" id="tidb-count" value="1" min="0">
-                    <label for="tikv-count" data-i18n="tikvLabel">TiKV:</label>
-                    <input type="number" id="tikv-count" value="1" min="0">
-                    <label for="pd-count" data-i18n="pdLabel">PD:</label>
-                    <input type="number" id="pd-count" value="1" min="0">
-                    <label for="tiflash-count" data-i18n="tiflashLabel">TiFlash:</label>
-                    <input type="number" id="tiflash-count" value="0" min="0">
+                <div class="input-group">
+                    <label for="tidb-versions" data-i18n="selectVersion">Select the TiDB version (可多选):</label>
+                    <select id="tidb-versions" multiple required>
+                        {% for version in versions %}
+                            <option value="{{ version }}">{{ version }}</option>
+                        {% endfor %}
+                    </select>
                 </div>
 
-                <label for="sql-query" data-i18n="testCaseLabel">Test Case (SQL):</label>
-                <textarea id="sql-query" rows="5">SELECT 1;</textarea>
+                <div class="input-group">
+                    <label data-i18n="componentsLabel">Number of Components:</label>
+                    <div class="component-counts">
+                        <label for="tidb-count" data-i18n="tidbLabel">TiDB:</label>
+                        <input type="number" id="tidb-count" value="1" min="0">
+                        <label for="tikv-count" data-i18n="tikvLabel">TiKV:</label>
+                        <input type="number" id="tikv-count" value="1" min="0">
+                        <label for="pd-count" data-i18n="pdLabel">PD:</label>
+                        <input type="number" id="pd-count" value="1" min="0">
+                        <label for="tiflash-count" data-i18n="tiflashLabel">TiFlash:</label>
+                        <input type="number" id="tiflash-count" value="0" min="0">
+                    </div>
+                </div>
 
-                <label for="expected-result" data-i18n="expectedResultLabel">Expect result:</label>
-                <textarea id="expected-result" rows="3">[(1,)]</textarea>
+                <div class="input-group">
+                    <label for="sql-query" data-i18n="testCaseLabel">Test Case (SQL):</label>
+                    <textarea id="sql-query" rows="5">SELECT 1;</textarea>
+
+                    <label for="expected-sql-result" data-i18n="expectedSqlResultLabel">预期 SQL 结果检查:</label>
+                    <textarea id="expected-sql-result" rows="3" data-i18n-placeholder="expectedSqlResultPlaceholder">[(1,)]</textarea>
+
+                    <label for="other-check-script" data-i18n="otherCheckScriptLabel">其他检查 (Shell 脚本):</label>
+                    <textarea id="other-check-script" rows="5" data-i18n-placeholder="otherCheckScriptPlaceholder"></textarea>
+                </div>
 
                 <button type="button" id="start-test-btn" data-i18n="startTestBtn">Start Test</button>
                 <button type="button" id="clean-env-btn" data-i18n="cleanEnvBtn">Clean</button>
-
             </form>
         </div>
         <div class="result-section">
@@ -114,7 +86,6 @@
     </div>
 
 <script>
-// --- 国际化脚本 ---
 const translations = {};
 let currentLang = localStorage.getItem('lang') || (navigator.language.startsWith('en') ? 'en' : 'zh');
 
@@ -153,9 +124,6 @@ function translatePage() {
     }
 }
 
-
-// --- 应用程序核心逻辑函数 (修复关键) ---
-
 const resultBox = document.getElementById('results');
 let pollInterval;
 
@@ -165,7 +133,7 @@ function disableButtons(state) {
 
 function pollStatus(taskId) {
     if (pollInterval) clearInterval(pollInterval);
-    localStorage.setItem('activeTestTaskId', taskId); // 使用不同的 task_id key
+    localStorage.setItem('activeTestTaskId', taskId);
 
     pollInterval = setInterval(async () => {
         try {
@@ -200,15 +168,15 @@ function updateResults(data) {
              content += `Version: ${res.version}\n`;
              const statusClass = res.status === 'Success' ? 'success' : 'failure';
              content += `Status: <span class="${statusClass}">${res.status}</span>\n`;
-             if (res.log_file) {
-                 content += `Log File: ${res.log_file}\n`;
-             }
+             if (res.log_file) content += `Log File: ${res.log_file}\n`;
              if (res.error) {
                  content += `Error: ${res.error}\n`;
              } else {
                  content += `SQL Port: ${res.sql_port}, Dashboard Port: ${res.dashboard_port}\n`;
-                 content += `Expected: ${res.expected}\n`;
-                 content += `Actual: ${res.actual}\n`;
+                 if (res.expected_sql) content += `Expected SQL: ${res.expected_sql}\n`;
+                 if (res.actual_sql) content += `Actual SQL: ${res.actual_sql}\n`;
+                 if (res.other_check_status) content += `Other Check Status: ${res.other_check_status}\n`;
+                 if (res.other_check_output) content += `Other Check Output: ${res.other_check_output}\n`;
              }
          });
     }
@@ -219,10 +187,6 @@ function updateResults(data) {
         content += "\n\n<strong>--- Summary ---</strong>\n";
         content += `Successful Versions: ${successVersions.join(', ') || 'None'}\n`;
         content += `Failed Versions: ${failedVersions.join(', ') || 'None'}\n`;
-    }
-
-    if (data.type === 'locate' && data.status === 'complete' && data.final_result) {
-        content += `\n\n<strong>--- Final Result ---</strong>\n<strong class="failure">${data.final_result}</strong>\n`;
     }
 
     resultBox.innerHTML = content.replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -244,12 +208,10 @@ async function cleanEnvironment(btn) {
         resultBox.textContent += `\nCleanup failed: ${error.message}`;
     } finally {
         btn.disabled = false;
-        btn.textContent = originalText; // 恢复按钮原来的文本
+        btn.textContent = originalText;
     }
 }
 
-
-// --- 页面加载完成后的主逻辑 ---
 document.addEventListener('DOMContentLoaded', function() {
     setLanguage(currentLang);
     document.getElementById('lang-zh').addEventListener('click', () => setLanguage('zh'));
@@ -262,7 +224,6 @@ document.addEventListener('DOMContentLoaded', function() {
         pollStatus(activeTaskId);
     }
 
-    // 【修复】为所有按钮绑定事件监听器
     document.getElementById('start-test-btn').addEventListener('click', async () => {
         const selectedOptions = document.getElementById('tidb-versions').selectedOptions;
         const versions = Array.from(selectedOptions).map(el => el.value);
@@ -271,25 +232,16 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        if (versions.length > 3) {
-            alert(translations[currentLang]?.versionLimitAlert || 'You can select a maximum of 3 versions at a time.');
-            return; // 阻止后续操作
-        }
+        const expectedSqlResult = document.getElementById('expected-sql-result').value;
+        const otherCheckScript = document.getElementById('other-check-script').value;
 
-        // 【新增】检查选择的版本数量是否超过5个
-        if (versions.length > 3) {
-            // 从语言包获取提示信息
-            alert(translations[currentLang]?.versionLimitAlert || 'You cannot select more than 3 versions at a time.');
-            return; // 阻止后续操作
+        if (!expectedSqlResult.trim() && !otherCheckScript.trim()) {
+            alert(translations[currentLang]?.atLeastOneExpectedResult || '请输入至少一个预期结果。');
+            return;
         }
 
         disableButtons(true);
         resultBox.textContent = translations[currentLang]?.taskSubmitted || 'Task submitted, initializing...';
-
-        const tidb_count = document.getElementById('tidb-count').value;
-        const tikv_count = document.getElementById('tikv-count').value;
-        const pd_count = document.getElementById('pd-count').value;
-        const tiflash_count = document.getElementById('tiflash-count').value;
 
         const response = await fetch('/start_test', {
             method: 'POST',
@@ -297,11 +249,12 @@ document.addEventListener('DOMContentLoaded', function() {
             body: JSON.stringify({
                 versions,
                 sql: document.getElementById('sql-query').value,
-                expected: document.getElementById('expected-result').value,
-                tidb: tidb_count,
-                tikv: tikv_count,
-                pd: pd_count,
-                tiflash: tiflash_count
+                expected_sql_result: expectedSqlResult,
+                other_check_script: otherCheckScript,
+                tidb: document.getElementById('tidb-count').value,
+                tikv: document.getElementById('tikv-count').value,
+                pd: document.getElementById('pd-count').value,
+                tiflash: document.getElementById('tiflash-count').value
             })
         });
 
@@ -314,12 +267,11 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    document.getElementById('auto-locate-link').addEventListener('click', () => {
+    document.getElementById('auto-locate-link').addEventListener('click', (event) => {
         event.preventDefault();
         localStorage.setItem('sqlQuery', document.getElementById('sql-query').value);
-        localStorage.setItem('expectedResult', document.getElementById('expected-result').value);
-
-        // 只有在数据存储完毕后，才手动进行页面跳转
+        localStorage.setItem('expectedSqlResult', document.getElementById('expected-sql-result').value);
+        localStorage.setItem('otherCheckScript', document.getElementById('other-check-script').value);
         window.location.href = event.target.href;
     });
 

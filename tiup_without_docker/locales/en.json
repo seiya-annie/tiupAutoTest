@@ -31,9 +31,14 @@
   "tidbBranchLabel": "TiDB Branch:",
   "tidbBranchPlaceholder": "e.g., release-8.5",
   "startCommitLabel": "Start Commit:",
-  "startCommitPlaceholder": "The last known 'good' commit SHA",
+  "startCommitPlaceholder": "Start commit SHA",
   "endCommitLabel": "End Commit:",
-  "endCommitPlaceholder": "The first known 'bad' commit SHA",
-  "commitFieldsAlert": "Please fill in all commit-related fields: Branch, Start Commit, and End Commit."
+  "endCommitPlaceholder": "End commit SHA",
+  "commitFieldsAlert": "Please fill in all commit-related fields: Branch, Start Commit, and End Commit.",
+  "expectedSqlResultLabel": "Expected SQL Result Check:",
+  "expectedSqlResultPlaceholder": "Enter the expected SQL query result string. If empty, this check is skipped.",
+  "otherCheckScriptLabel": "Other Checks (Shell Script):",
+  "otherCheckScriptPlaceholder": "Enter shell script content. A return code of 0 means success, non-zero means failure. If empty, this check is skipped.",
+  "atLeastOneExpectedResult": "Please provide at least one expected result (SQL result or other check script)."
 
 }

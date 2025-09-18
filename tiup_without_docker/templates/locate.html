@@ -100,8 +100,12 @@
                 <div class="input-group">
                     <label for="sql-query" data-i18n="testCaseLabel">测试用例 (SQL):</label>
                     <textarea id="sql-query" rows="5"></textarea>
-                    <label for="expected-result" data-i18n="expectedResultLabel">预期结果:</label>
-                    <textarea id="expected-result" rows="3"></textarea>
+                    <!-- vvvvvvvvvvvv CHANGED vvvvvvvvvvvv -->
+                    <label for="expected-sql-result" data-i18n="expectedSqlResultLabel">预期 SQL 结果检查:</label>
+                    <textarea id="expected-sql-result" rows="3" data-i18n-placeholder="expectedSqlResultPlaceholder"></textarea>
+                    <label for="other-check-script" data-i18n="otherCheckScriptLabel">其他检查 (Shell 脚本):</label>
+                    <textarea id="other-check-script" rows="5" data-i18n-placeholder="otherCheckScriptPlaceholder"></textarea>
+                    <!-- ^^^^^^^^^^^^ END CHANGED ^^^^^^^^^^^^ -->
                 </div>
 
                 <button type="button" id="start-locate-btn" data-i18n="startLocateBtn">开始定位</button>
@@ -198,8 +202,12 @@ function updateResults(data) {
              if (res.error) content += `Error: ${res.error}\n`;
              else {
                  content += `SQL Port: ${res.sql_port}, Dashboard Port: ${res.dashboard_port}\n`;
-                 content += `Expected: ${res.expected}\n`;
-                 content += `Actual: ${res.actual}\n`;
+                 // vvvvvvvvvvvv CHANGED vvvvvvvvvvvv
+                 if (res.expected_sql) content += `Expected SQL: ${res.expected_sql}\n`;
+                 if (res.actual_sql) content += `Actual SQL: ${res.actual_sql}\n`;
+                 if (res.other_check_status) content += `Other Check Status: ${res.other_check_status}\n`;
+                 if (res.other_check_output) content += `Other Check Output: ${res.other_check_output}\n`;
+                 // ^^^^^^^^^^^^ END CHANGED ^^^^^^^^^^^^
              }
          });
     }
@@ -240,12 +248,17 @@ document.addEventListener('DOMContentLoaded', function() {
         disableButtons(true);
         pollStatus(activeTaskId);
     }
+    // Restore saved inputs from localStorage
     if (localStorage.getItem('sqlQuery')) {
         document.getElementById('sql-query').value = localStorage.getItem('sqlQuery');
     }
-    if (localStorage.getItem('expectedResult')) {
-        document.getElementById('expected-result').value = localStorage.getItem('expectedResult');
+    if (localStorage.getItem('expectedSqlResult')) {
+        document.getElementById('expected-sql-result').value = localStorage.getItem('expectedSqlResult');
     }
+    if (localStorage.getItem('otherCheckScript')) {
+        document.getElementById('other-check-script').value = localStorage.getItem('otherCheckScript');
+    }
+
 
     const modeVersionRadio = document.getElementById('mode-version');
     const modeCommitRadio = document.getElementById('mode-commit');
@@ -267,15 +280,28 @@ document.addEventListener('DOMContentLoaded', function() {
 
     document.getElementById('start-locate-btn').addEventListener('click', async () => {
         const locateMode = document.querySelector('input[name="locate-mode"]:checked').value;
+
+        // vvvvvvvvvvvv CHANGED vvvvvvvvvvvv
+        const expectedSqlResult = document.getElementById('expected-sql-result').value;
+        const otherCheckScript = document.getElementById('other-check-script').value;
+
+        if (!expectedSqlResult.trim() && !otherCheckScript.trim()) {
+            alert(translations[currentLang]?.atLeastOneExpectedResult || '请输入至少一个预期结果 (SQL 结果或其它检查脚本)。');
+            return;
+        }
+
         const payload = {
             locate_mode: locateMode,
             sql: document.getElementById('sql-query').value,
-            expected: document.getElementById('expected-result').value,
+            expected_sql_result: expectedSqlResult,
+            other_check_script: otherCheckScript,
             tidb: document.getElementById('tidb-count').value,
             tikv: document.getElementById('tikv-count').value,
             pd: document.getElementById('pd-count').value,
             tiflash: document.getElementById('tiflash-count').value,
         };
+        // ^^^^^^^^^^^^ END CHANGED ^^^^^^^^^^^^
+
 
         if (locateMode === 'version') {
             payload.bug_version = document.getElementById('bug-version').value;
@@ -294,6 +320,12 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
 
+        // Save inputs to localStorage
+        localStorage.setItem('sqlQuery', payload.sql);
+        localStorage.setItem('expectedSqlResult', payload.expected_sql_result);
+        localStorage.setItem('otherCheckScript', payload.other_check_script);
+
+
         disableButtons(true);
         resultBox.textContent = translations[currentLang]?.waitingForLocate || 'Location task submitted, initializing...';
 
@@ -311,7 +343,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // 【修复】为“清理环境”按钮绑定事件
+    // 为“清理环境”按钮绑定事件
     document.getElementById('clean-env-btn').addEventListener('click', (e) => {
         cleanEnvironment(e.target);
     });
