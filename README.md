@@ -46,6 +46,20 @@ Click "Start Test" to begin.
 
 To find a specific bug, click "Auto Locate Bug" to navigate to the bisection page.
 
+In Other Checks(Shell script) input-box, you can input the shell script code to check tidb log and so on. eg.
+```
+KEYWORD="panic"
+PANIC_FILES=$(find . -name "tidb.log" -type f -print0 | xargs -0 grep -li "$KEYWORD")
+if [ -z "$PANIC_FILES" ]; then
+  echo "检查通过: 在任何 tidb.log 文件中均未发现 'panic' 字符串。"
+  exit 0 # 成功退出
+else
+  echo "检查失败: 在以下文件中发现了 'panic' 字符串:"
+  echo "$PANIC_FILES"
+  exit 1 # 失败退出
+fi
+```
+
 Always use the "Clean Environment" button after your tests to terminate all running tiup processes and remove log files for your session.
 
 # 🔧 (Optional) Using a Custom Docker Image
