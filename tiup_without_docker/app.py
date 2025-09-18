@@ -2,13 +2,14 @@ import os
 import subprocess
 import random
 import time
-import json
 import threading
 from uuid import uuid4
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for, send_from_directory
+from flask import Flask, render_template, request, jsonify, session, send_from_directory
 from packaging.version import Version
 import mysql.connector
 import sys
+import stat
+import ast
 
 TIDB_GO_VERSION_MAP = {
     "4.0": "1.13.15",
@@ -118,7 +119,8 @@ def run_command(command, work_dir=".", shell=False, check=True, print_output=Fal
         print(f"❌ 命令未找到: {command[0]}. 请确保它已安装并在您的 PATH 中。")
         sys.exit(1)
 
-def get_commit_list(start_tag, end_tag,task_id):
+
+def get_commit_list(start_tag, end_tag, task_id):
     """获取两个 tag 之间的 commit SHA 列表，按时间正序排列"""
     tasks[task_id]['log'].append(f"\nℹ️ 准备切换到与 tag '{end_tag}' 相关的 release 分支...")
     try:
@@ -146,13 +148,14 @@ def get_commit_list(start_tag, end_tag,task_id):
         # --reverse 参数让 commit 从旧到新排列，符合二分查找的逻辑顺序
         commits = output.strip().split('\n')
         tasks[task_id]['log'].append(f"✅ 找到 {len(commits)} 个 commits。")
-        return [c for c in commits if c] # 过滤空行
+        return [c for c in commits if c]
     except Exception as e:
         tasks[task_id]['log'].append(f"❌ get commits list fail")
         # 在二分查找中，编译失败通常被视为 "bad" commit
         return None
 
-def compile_at_commit(commit_sha,task_id, version):
+
+def compile_at_commit(commit_sha, task_id, version):
     """Checkout 到指定 commit 并进行编译"""
     tasks[task_id]['log'].append(f"\n🔧 切换到 commit: {commit_sha[:8]} 并开始编译...")
     try:
@@ -193,6 +196,7 @@ def compile_at_commit(commit_sha,task_id, version):
         return None
 
 # --- 辅助函数 ---
+
 
 def get_tidb_versions():
     """通过 tiup list tidb 获取可用的 TiDB 版本列表"""
@@ -245,13 +249,87 @@ def run_sql_on_tidb(sql, port):
         conn.commit()
         cursor.close()
         conn.close()
-        return result_str.strip(), True
+        return result_str, True
     except mysql.connector.Error as err:
         print(f"SQL 执行失败")
         return str(err), False
 
 
-def test_single_version(version, sql, expected_result, task_id, index, cleanup_after=False, commit=''):
+def run_other_check(script_content, port, task_id):
+    """执行其他检查脚本"""
+    tasks[task_id]['log'].append("--- 开始其他检查 ---")
+
+    # 1. 获取 TiDB 日志目录
+    log_dir_query = "show config where type='tidb' and name='log.file.filename';"
+    try:
+        result, success = run_sql_on_tidb(log_dir_query, port)
+        if not success or not result:
+            msg = "获取 TiDB 日志目录失败。"
+            tasks[task_id]['log'].append(f"❌ {msg}")
+            return "Failure", msg
+
+        try:
+            data_list = ast.literal_eval(result)
+            log_file_path = data_list[0][3]
+        except (ValueError, SyntaxError) as e:
+            print(f"解析字符串时出错: {e}")
+
+        tasks[task_id]['log'].append(f"✅ 成功获取到tidb日志目录: {log_file_path}")
+        # e.g., /Users/lt/.tiup/data/Ux1ux8z/tidb-0/tidb.log -> /Users/lt/.tiup/data/Ux1ux8z/
+        base_dir = os.path.dirname(os.path.dirname(log_file_path))
+        tasks[task_id]['log'].append(f"✅ 脚本将会在此基础目录执行: {base_dir}")
+
+    except Exception as e:
+        msg = f"解析 TiDB 日志目录时出错: {e}"
+        tasks[task_id]['log'].append(f"❌ {msg}")
+        return "Failure", msg
+
+    # 2. 保存并执行脚本
+    script_path = os.path.join(base_dir, f"check_script_{task_id[:8]}.sh")
+    try:
+        with open(script_path, 'w') as f:
+            f.write("#!/bin/bash\n")
+            f.write(script_content)
+
+        # 赋予脚本执行权限
+        st = os.stat(script_path)
+        os.chmod(script_path, st.st_mode | stat.S_IEXEC)
+        tasks[task_id]['log'].append(f"✅ 检查脚本已保存到: {script_path}")
+
+        # 执行脚本
+        tasks[task_id]['log'].append(f"🚀 执行检查脚本...")
+        process = subprocess.run(
+            ['/bin/bash', script_path],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=base_dir
+        )
+
+        script_output = process.stdout.strip() + "\n" + process.stderr.strip()
+        tasks[task_id]['log'].append(f"脚本输出:\n{script_output}")
+        print("return code:",process.returncode)
+
+        # 3. 根据返回值判断结果
+        if process.returncode == 0:
+            tasks[task_id]['log'].append("✅ 其他检查通过 (脚本返回值为 0)。")
+            return "Success", script_output
+        else:
+            tasks[task_id]['log'].append(f"❌ 其他检查失败 (脚本返回值为 {process.returncode})。")
+            return "Failure", script_output
+
+    except Exception as e:
+        msg = f"执行检查脚本时发生严重错误: {e}"
+        tasks[task_id]['log'].append(f"❌ {msg}")
+        return "Failure", msg
+    finally:
+        # 清理脚本文件
+        if os.path.exists(script_path):
+            os.remove(script_path)
+
+
+def test_single_version(version, sql, expected_sql_result, other_check_script, task_id, index, cleanup_after=False,
+                        commit=''):
     """使用 tiup playground 启动一个 TiDB 集群并执行测试"""
     port_offset = random.randint(10000, 30000)
     sql_port = 4000 + port_offset
@@ -275,25 +353,32 @@ def test_single_version(version, sql, expected_result, task_id, index, cleanup_a
     tikv_number = COMPONENT_COUNTS['tikv']
     pd_number = COMPONENT_COUNTS['pd']
     tiflash_number = COMPONENT_COUNTS['tiflash']
+
+    if commit:
+        version_commit = f"{version}-{commit}"
+        result_data = {'version': version_commit}
+    else:
+        result_data = {'version': version}
+
     try:
         log_file = open(log_filename, 'w', encoding='utf-8')
         if commit != '':
             binary_full_path = os.path.join(TIDB_REPO_PATH, TIDB_BINARY_PATH)
             cmd = ['tiup', 'playground', f'--db.binpath={binary_full_path}', version, f'--port-offset={port_offset}',
-                   '--without-monitor','--kv', f'{tikv_number}', '--tiflash', f'{tiflash_number}',
-                   '--pd', f'{pd_number}', '--db',f'{tidb_number}' ]
+                   '--without-monitor', '--kv', f'{tikv_number}', '--tiflash', f'{tiflash_number}',
+                   '--pd', f'{pd_number}', '--db', f'{tidb_number}']
             print("install binary cmd:", cmd)
         else:
             cmd = ['tiup', 'playground', version, f'--port-offset={port_offset}', '--without-monitor',
                    '--kv', f'{tikv_number}', '--tiflash', f'{tiflash_number}',
-                   '--pd', f'{pd_number}', '--db',f'{tidb_number}']
+                   '--pd', f'{pd_number}', '--db', f'{tidb_number}']
             print("install version cmd:", cmd)
 
         # 使用 Popen 启动非阻塞的子进程
         process = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, text=True, encoding='utf-8')
 
         # 将进程对象和版本信息存入 task，以便后续清理
-        tasks[task_id]['processes'].append({'version': version, 'process': process, 'offset': port_offset,'log_file': log_filename})
+        tasks[task_id]['processes'].append({'version': version, 'process': process, 'offset': port_offset, 'log_file': log_filename})
 
         if commit != '':
             log_message = f"commit {commit}: 集群进程已启动 (PID: {process.pid})，等待 TiDB 服务就绪..."
@@ -329,28 +414,44 @@ def test_single_version(version, sql, expected_result, task_id, index, cleanup_a
         if commit != '':
             sql_check = 'select tidb_version();'
             v_result, success = run_sql_on_tidb(sql_check, sql_port)
-            if commit not in ''.join(v_result.split()):
-                tasks[task_id]['log'].append("tidb binary is not correct")
-                raise Exception(f"TiUP 进程意外退出。Stderr: {process.stderr.read()}")
-            tasks[task_id]['log'].append("check tidb binary version pass.")
 
-        actual_result, success = run_sql_on_tidb(sql, sql_port)
+            if not success or commit not in ''.join(v_result.split()):
+                raise Exception(f"TiDB binary 版本不正确! 期望包含 {commit}, 实际为 {v_result}")
+            tasks[task_id]['log'].append("✅ TiDB binary 版本检查通过。")
 
-        if ''.join(expected_result.split()) in ''.join(actual_result.split()):
-            status = "Success"
-        else:
-            status = "Failure"
-        if commit != '':
-            version_commit = f"{version}-{commit}"
-            result_data = {
-                'version': version_commit, 'status': status, 'sql_port': sql_port,
-                'dashboard_port': dashboard_port, 'expected': expected_result, 'actual': actual_result
-            }
-        else:
-            result_data = {
-                'version': version, 'status': status, 'sql_port': sql_port,
-                'dashboard_port': dashboard_port, 'expected': expected_result, 'actual': actual_result
-            }
+        # --- 执行检查 ---
+        sql_check_passed = None
+        other_check_passed = None
+
+        # 1. SQL 结果检查
+        if expected_sql_result.strip():
+            actual_sql_resultstr, success = run_sql_on_tidb(sql, sql_port)
+            result_data.update({'expected_sql': expected_sql_result, 'actual_sql': actual_sql_resultstr})
+
+            if success and ''.join(expected_sql_result.split()) in ''.join(actual_sql_resultstr.split()):
+                sql_check_passed = True
+            else:
+                sql_check_passed = False
+        # 2. 其他检查
+        if other_check_script.strip():
+            other_status, other_output = run_other_check(other_check_script, sql_port, task_id)
+            result_data.update({'other_check_status': other_status, 'other_check_output': other_output})
+            other_check_passed = (other_status == "Success")
+        # 3. 综合判断最终结果
+        if sql_check_passed is None and other_check_passed is None:
+            # This case is pre-validated in start_locate, but as a safeguard
+            raise Exception("没有提供任何检查标准。")
+
+        final_status = "Success"  # Assume success
+        if sql_check_passed is False or other_check_passed is False:
+            final_status = "Failure"
+
+        result_data.update({
+                'status': final_status,
+                'sql_port': sql_port,
+                'dashboard_port': dashboard_port
+        })
+
 
     except Exception as e:
         error_msg = f"测试版本 {version} 时发生错误: {e}"
@@ -359,7 +460,7 @@ def test_single_version(version, sql, expected_result, task_id, index, cleanup_a
     finally:
         # 在二分查找模式下，测试完一个版本就立即清理
         if log_file:
-            log_file.close() # 关闭日志文件句柄
+            log_file.close()
         if cleanup_after and process:
             if commit != '':
                 tasks[task_id]['log'].append(f"commit {commit}: 测试完成，清理集群 (PID: {process.pid})...")
@@ -377,6 +478,7 @@ def serve_locales(filename):
     """This route serves static files from the 'locales' directory."""
     # Now that it's imported, this function call will work correctly.
     return send_from_directory(os.path.join(app.root_path, 'locales'), filename)
+
 
 @app.route('/')
 def index():
@@ -396,8 +498,14 @@ def start_test():
     data = request.json
     selected_versions = data.get('versions', [])
     sql = data.get('sql')
-    print("testcase:",sql)
-    expected_result = data.get('expected')
+    print("testcase:", sql)
+    expected_sql = data.get('expected_sql_result', '').strip()
+    other_script = data.get('other_check_script', '').strip()
+
+    if not selected_versions:
+        return jsonify({'error': '请至少选择一个版本。'}), 400
+    if not expected_sql and not other_script:
+        return jsonify({'error': '请输入至少一个预期结果。'}), 400
 
     tidb_count = int(data.get('tidb') or COMPONENT_COUNTS['tidb'])
     tikv_count = int(data.get('tikv') or COMPONENT_COUNTS['tikv'])
@@ -415,7 +523,7 @@ def start_test():
     print("收到定位任务请求:")
     print(f"  - Bug 版本: {selected_versions}")
     print(f"  - SQL: {sql}")
-    print(f"  - 预期结果: {expected_result}")
+    print(f"  - 预期结果: {expected_sql}")
 
     task_id = str(uuid4())
     tasks[task_id] = {
@@ -428,7 +536,7 @@ def start_test():
 
     threads = []
     for i, version in enumerate(selected_versions):
-        thread = threading.Thread(target=test_single_version, args=(version, sql, expected_result, task_id, i, False, ''))
+        thread = threading.Thread(target=test_single_version, args=(version, sql, expected_sql, other_script, task_id, i, False, ''))
         threads.append(thread)
         thread.start()
 
@@ -442,7 +550,7 @@ def start_test():
     return jsonify({'task_id': task_id})
 
 
-def run_binary_search_with_version(start_v_str, end_v_str, sql, expected, task_id):
+def run_binary_search_with_version(start_v_str, end_v_str, sql, expected_sql, other_check, task_id):
     """二分查找逻辑"""
     all_versions = get_tidb_versions()
 
@@ -469,9 +577,8 @@ def run_binary_search_with_version(start_v_str, end_v_str, sql, expected, task_i
                 high = mid - 1
                 continue
             result_index = len(tasks[task_id]['results'])
-            tasks[task_id]['results'].append({})  # 占位
-            # cleanup_after=True 表示测试完就清理
-            test_single_version(end_version, sql, expected, task_id, result_index, cleanup_after=True,
+            tasks[task_id]['results'].append({})
+            test_single_version(end_version, sql, expected_sql, other_check, task_id, result_index, cleanup_after=True,
                                 commit=commit_sha)
 
             result_data = tasks[task_id]['results'][result_index]
@@ -506,9 +613,9 @@ def run_binary_search_with_version(start_v_str, end_v_str, sql, expected, task_i
             version_to_test = search_space[mid_idx]
 
             result_index = len(tasks[task_id]['results'])
-            tasks[task_id]['results'].append({})  # 占位
-            # cleanup_after=True 表示测试完就清理
-            test_single_version(version_to_test, sql, expected, task_id, result_index, cleanup_after=True)
+            tasks[task_id]['results'].append({})
+            test_single_version(version_to_test, sql, expected_sql, other_check, task_id, result_index,
+                                cleanup_after=True)
 
             result_data = tasks[task_id]['results'][result_index]
 
@@ -529,7 +636,7 @@ def run_binary_search_with_version(start_v_str, end_v_str, sql, expected, task_i
         tasks[task_id]['log'].append("检查基线版本 v5.4.0...")
         # 【修复】为 v5.4.0 测试添加占位符
         tasks[task_id]['results'].append({})
-        test_single_version("v5.4.0", sql, expected, task_id, 0)
+        test_single_version("v5.4.0", sql, expected_sql, other_check, task_id, 0)
         # 确保测试线程有时间写入结果
         time.sleep(0.1)
         v540_result = tasks[task_id]['results'][0]
@@ -564,13 +671,15 @@ def run_binary_search_with_version(start_v_str, end_v_str, sql, expected, task_i
 
     tasks[task_id]['status'] = 'complete'
 
-def run_binary_search_with_commit(start_commit, end_commit, branch, sql, expected, task_id):
-    """二分查找逻辑"""
+
+def run_binary_search_with_commit(start_commit, end_commit, branch, sql, expected_sql, other_check, task_id):
+    """二分查找逻辑 (已更新)"""
 
     def commit_binary_search_logic(start_commit, end_commit, branch):
         try:
             print(f"[*] 正在切换到分支: {branch}")
-            subprocess.run(["git", "checkout", "-f", branch], cwd=TIDB_REPO_PATH, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "checkout", "-f", branch], cwd=TIDB_REPO_PATH, check=True, capture_output=True,
+                           text=True)
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"切换到分支 '{branch}' 失败: {e.stderr.strip()}")
             return
@@ -595,7 +704,7 @@ def run_binary_search_with_commit(start_commit, end_commit, branch, sql, expecte
 
         if not commits:
             print("在指定的 tag 范围内未找到任何 commit。")
-            return
+            return None
 
         tasks[task_id]['log'].append(f"开始在 {commits[0]} 到 {commits[-1]} 之间进行二分查找...")
 
@@ -622,13 +731,13 @@ def run_binary_search_with_commit(start_commit, end_commit, branch, sql, expecte
             # cleanup_after=True 表示测试完就清理
             if branch == 'master':
                 install_version = 'nightly'
-            elif str(branch).find('release-')!= -1:
+            elif str(branch).find('release-') != -1:
                 install_version = 'v' + str(branch).lstrip('release-') + '.0'
             else:
                 tasks[task_id]['log'].append(f"branch format is incorrect")
                 return
-            test_single_version(install_version, sql, expected, task_id, result_index, cleanup_after=True,
-                                commit=commit_sha)
+            test_single_version(install_version, sql, expected_sql, other_check, task_id, result_index,
+                                cleanup_after=True, commit=commit_sha)
 
             result_data = tasks[task_id]['results'][result_index]
 
@@ -646,17 +755,17 @@ def run_binary_search_with_commit(start_commit, end_commit, branch, sql, expecte
 
     # 基线版本测试
     found_commit = commit_binary_search_logic(start_commit, end_commit, branch)
+    output = ""
     if found_commit:
         try:
-            output = run_command(["git", "show", found_commit, "--no-patch", ], work_dir=TIDB_REPO_PATH)
-            # tasks[task_id]['log'].append(f"✅ import issue and pr: {output}")
-
-        except RuntimeError as e:
+            output = run_command(["git", "show", found_commit, "--no-patch"], work_dir=TIDB_REPO_PATH)
+        except Exception as e:
             print(e)
     tasks[task_id][
         'final_result'] = f"定位到第一个出错的commit是: {found_commit}\n\nimport issue and pr: {output}, " if found_commit else f"在 {branch} 范围内未找到不符合预期的commit。"
 
     tasks[task_id]['status'] = 'complete'
+
 
 @app.route('/start_locate', methods=['POST'])
 def start_locate():
@@ -668,7 +777,14 @@ def start_locate():
 
     locate_mode = data.get('locate_mode')
     sql = data.get('sql')
-    expected_result = data.get('expected')
+    expected_sql_result = data.get('expected_sql_result', '').strip()
+    other_check_script = data.get('other_check_script', '').strip()
+
+    if not expected_sql_result and not other_check_script:
+        return jsonify({'error': '请输入至少一个预期结果 (SQL 结果或其它检查脚本)。'}), 400
+
+    print("收到的预期 SQL 结果:", expected_sql_result)
+    print("收到的其他检查脚本:", other_check_script)
 
     tidb_count = int(data.get('tidb') or COMPONENT_COUNTS['tidb'])
     tikv_count = int(data.get('tikv') or COMPONENT_COUNTS['tikv'])
@@ -685,7 +801,7 @@ def start_locate():
     # print(f"[*] Global component counts have been updated to: {COMPONENT_COUNTS}")
 
     bug_version = start_version_str = branch = start_commit = end_commit = ''
-     # 根据不同模式解析并打印特定参数
+
     if locate_mode == 'version':
         bug_version = data.get('bug_version')
         start_version_str = data.get('start_version') or "v5.4.0"
@@ -701,10 +817,10 @@ def start_locate():
         print(f"  - start version: {start_version_str}")
         print(f"  - end version: {bug_version}")
         print(f"  - SQL: {sql}")
-        print(f"  - 预期结果: {expected_result}")
+        print(f"  - 预期结果: {expected_sql_result}")
     elif locate_mode == 'commit':
         branch = data.get('branch')
-        if (branch != 'master') and (str(branch).find('release-') == -1) :
+        if (branch != 'master') and (str(branch).find('release-') == -1):
             return jsonify({'error': 'branch format is incorrect, should be release-x.x'}), 400
         start_commit = data.get('start_commit')
         end_commit = data.get('end_commit')
@@ -716,7 +832,7 @@ def start_locate():
         print(f"  - end commit: {end_commit}")
         print(f"  - branch: {branch}")
         print(f"  - SQL: {sql}")
-        print(f"  - 预期结果: {expected_result}")
+        print(f"  - 预期结果: {expected_sql_result}")
     else:
         return jsonify({'error': f'Unknown locate_mode: {locate_mode}'}), 400
 
@@ -730,14 +846,13 @@ def start_locate():
 
     if locate_mode == 'version':
         thread = threading.Thread(target=run_binary_search_with_version,
-                              args=(start_version_str, bug_version, sql, expected_result, task_id))
+                              args=(start_version_str, bug_version, sql, expected_sql_result, other_check_script, task_id))
     elif locate_mode == 'commit':
         thread = threading.Thread(target=run_binary_search_with_commit,
-                                  args=(start_commit, end_commit, branch, sql, expected_result, task_id))
+                                  args=(start_commit, end_commit, branch, sql, expected_sql_result, other_check_script, task_id))
     thread.start()
 
     return jsonify({'task_id': task_id})
-
 
 
 @app.route('/status/<task_id>')
@@ -755,7 +870,7 @@ def task_status(task_id):
         'results': task.get('results', []),
         'type': task.get('type'),
         'final_result': task.get('final_result'),
-        'processes_info': [] # 创建一个新的列表来存放进程信息
+        'processes_info': []
     }
 
     # 遍历原始任务中的进程列表
@@ -808,8 +923,8 @@ def clean_env():
             
             # 2. 删除日志文件 (This block is at the third level)
             log_file = proc_info.get('log_file')
-            if log_file and os.path.exists(log_file): # <-- This is the corrected line
-                # This block is at the fourth level
+
+            if log_file and os.path.exists(log_file):
                 try:
                     os.remove(log_file)
                     deleted_logs.append(log_file)
@@ -825,6 +940,7 @@ def clean_env():
         'deleted_logs': deleted_logs,
         'errors': errors
     })
+
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
