@@ -239,7 +239,7 @@ def run_sql_on_tidb(sql, port):
             autocommit=True,
             connection_timeout=20
         )
-        cursor = conn.cursor()  # Use dictionary cursor
+        cursor = conn.cursor()
         for stmt in sql.split(';'):
             if stmt.strip():
                 cursor.execute(stmt)
@@ -249,7 +249,6 @@ def run_sql_on_tidb(sql, port):
         conn.commit()
         cursor.close()
         conn.close()
-        # Return the raw data (list of dicts) and success status
         return result_str, True
     except mysql.connector.Error as err:
         print(f"SQL 执行失败")
@@ -552,7 +551,7 @@ def start_test():
 
 
 def run_binary_search_with_version(start_v_str, end_v_str, sql, expected_sql, other_check, task_id):
-    """二分查找逻辑 (已更新)"""
+    """二分查找逻辑"""
     all_versions = get_tidb_versions()
 
     def commit_binary_search_logic(start_version, end_version):
@@ -781,13 +780,11 @@ def start_locate():
     expected_sql_result = data.get('expected_sql_result', '').strip()
     other_check_script = data.get('other_check_script', '').strip()
 
-    # --- 新增验证逻辑 ---
     if not expected_sql_result and not other_check_script:
         return jsonify({'error': '请输入至少一个预期结果 (SQL 结果或其它检查脚本)。'}), 400
 
     print("收到的预期 SQL 结果:", expected_sql_result)
     print("收到的其他检查脚本:", other_check_script)
-    # --- 结束新增验证逻辑 ---
 
     tidb_count = int(data.get('tidb') or COMPONENT_COUNTS['tidb'])
     tikv_count = int(data.get('tikv') or COMPONENT_COUNTS['tikv'])
