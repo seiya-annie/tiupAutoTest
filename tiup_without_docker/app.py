@@ -142,7 +142,7 @@ def get_commit_list(start_tag, end_tag, task_id):
         return
 
     try:
-        command = ["git", "rev-list", "--reverse", f"{start_tag}...{end_tag}"]
+        command = ["git", "rev-list", "--reverse", f"{start_tag}..{end_tag}"]
         output = run_command(command, TIDB_REPO_PATH)
         tasks[task_id]['log'].append(f"\n🔍 获取 {start_tag}..{end_tag} 之间的 commit 列表...")
         # --reverse 参数让 commit 从旧到新排列，符合二分查找的逻辑顺序
@@ -673,7 +673,7 @@ def run_binary_search_with_version(start_v_str, end_v_str, sql, expected_sql, ot
 
 
 def run_binary_search_with_commit(start_commit, end_commit, branch, sql, expected_sql, other_check, task_id):
-    """二分查找逻辑 (已更新)"""
+    """二分查找逻辑"""
 
     def commit_binary_search_logic(start_commit, end_commit, branch):
         try:
