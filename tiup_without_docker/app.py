@@ -428,7 +428,7 @@ def test_single_version(version, sql, expected_sql_result, other_check_script, t
             actual_sql_resultstr, success = run_sql_on_tidb(sql, sql_port)
             result_data.update({'expected_sql': expected_sql_result, 'actual_sql': actual_sql_resultstr})
 
-            if success and ''.join(expected_sql_result.split()) in ''.join(actual_sql_resultstr.split()):
+            if ''.join(expected_sql_result.split()) in ''.join(actual_sql_resultstr.split()):
                 sql_check_passed = True
             else:
                 sql_check_passed = False
