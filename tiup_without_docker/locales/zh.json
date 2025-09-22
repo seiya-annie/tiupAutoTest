@@ -36,7 +36,7 @@
   "endCommitPlaceholder": "End Commit SHA",
   "commitFieldsAlert": "请填写所有与 Commit 相关的字段：分支、起始Commit和结束Commit。",
   "expectedSqlResultLabel": "预期 SQL 结果检查:",
-  "expectedSqlResultPlaceholder": "输入预期的 SQL 查询结果字符串。如果为空，则跳过此项检查。",
+  "expectedSqlResultPlaceholder": "输入预期的 SQL 查询结果字符串。如果为空，则只检查sql是否能执行成功。",
   "otherCheckScriptLabel": "其他检查 (Shell 脚本):",
   "otherCheckScriptPlaceholder": "输入 shell 脚本内容。脚本最后一条命令的返回值为 0 表示成功，非 0 表示失败。如果为空，则跳过此项检查。",
   "atLeastOneExpectedResult": "请输入至少一个预期结果 (SQL 结果或其它检查脚本)。"

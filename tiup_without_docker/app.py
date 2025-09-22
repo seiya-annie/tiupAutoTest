@@ -424,14 +424,22 @@ def test_single_version(version, sql, expected_sql_result, other_check_script, t
         other_check_passed = None
 
         # 1. SQL 结果检查
-        if expected_sql_result.strip():
+        if expected_sql_result is not None:
             actual_sql_resultstr, success = run_sql_on_tidb(sql, sql_port)
+            print("actual result:", actual_sql_resultstr)
             result_data.update({'expected_sql': expected_sql_result, 'actual_sql': actual_sql_resultstr})
 
-            if success and ''.join(expected_sql_result.split()) in ''.join(actual_sql_resultstr.split()):
-                sql_check_passed = True
+            if expected_sql_result.strip():
+                if ''.join(expected_sql_result.split()) in ''.join(actual_sql_resultstr.split()):
+                    sql_check_passed = True
+                else:
+                    sql_check_passed = False
             else:
-                sql_check_passed = False
+                # if expected is empty，then sql executed success means check pass.
+                if success:
+                    print("expected sql is empty, and sql executed success")
+                    sql_check_passed = True
+                else: sql_check_passed = False
         # 2. 其他检查
         if other_check_script.strip():
             other_status, other_output = run_other_check(other_check_script, sql_port, task_id)
@@ -451,8 +459,6 @@ def test_single_version(version, sql, expected_sql_result, other_check_script, t
                 'sql_port': sql_port,
                 'dashboard_port': dashboard_port
         })
-
-
     except Exception as e:
         error_msg = f"测试版本 {version} 时发生错误: {e}"
         tasks[task_id]['log'].append(error_msg)
@@ -504,8 +510,6 @@ def start_test():
 
     if not selected_versions:
         return jsonify({'error': '请至少选择一个版本。'}), 400
-    if not expected_sql and not other_script:
-        return jsonify({'error': '请输入至少一个预期结果。'}), 400
 
     tidb_count = int(data.get('tidb') or COMPONENT_COUNTS['tidb'])
     tikv_count = int(data.get('tikv') or COMPONENT_COUNTS['tikv'])
@@ -631,7 +635,34 @@ def run_binary_search_with_version(start_v_str, end_v_str, sql, expected_sql, ot
 
         return first_bad_version
 
-    # 基线版本测试
+    # 1. 对起始版本进行基线检查
+    tasks[task_id]['log'].append(f"\n--- 正在执行基线检查 (起始点): {start_v_str} ---")
+    start_index = len(tasks[task_id]['results'])
+    tasks[task_id]['results'].append({})
+    test_single_version(start_v_str, sql, expected_sql, other_check, task_id, start_index, cleanup_after=True)
+
+    start_result = tasks[task_id]['results'][start_index]
+    if start_result.get('status') == 'Failure':
+        error_msg = "本范围内无法找到引入问题的 pr,请在更早的版本或者 commit 范围内查找"
+        tasks[task_id]['log'].append(f"\n❌ 基线检查失败: 起始版本 {start_v_str} 已不符合预期。")
+        tasks[task_id]['final_result'] = error_msg
+        tasks[task_id]['status'] = 'complete'
+        return
+
+    # 2. 对结束版本（Bug上报版本）进行健全性检查
+    tasks[task_id]['log'].append(f"\n--- 正在执行健全性检查 (结束点): {end_v_str} ---")
+    end_index = len(tasks[task_id]['results'])
+    tasks[task_id]['results'].append({})
+    test_single_version(end_v_str, sql, expected_sql, other_check, task_id, end_index, cleanup_after=True)
+
+    end_result = tasks[task_id]['results'][end_index]
+    if end_result.get('status') == 'Success':
+        error_msg = f"健全性检查失败: 'Bug 上报版本' ({end_v_str}) 的测试结果为成功，无法进行二分查找。"
+        tasks[task_id]['log'].append(f"\n❌ {error_msg}")
+        tasks[task_id]['final_result'] = error_msg
+        tasks[task_id]['status'] = 'complete'
+        return
+
     if start_v_str == "v5.4.0":
         tasks[task_id]['log'].append("检查基线版本 v5.4.0...")
         # 【修复】为 v5.4.0 测试添加占位符
@@ -754,6 +785,31 @@ def run_binary_search_with_commit(start_commit, end_commit, branch, sql, expecte
         return first_bad_commit
 
     # 基线版本测试
+    start_commit_to_test = start_commit
+    tasks[task_id]['log'].append(f"\n--- 正在执行基线检查 (起始 Commit): {start_commit_to_test[:7]} ---")
+
+    def test_a_commit(commit_sha, index):
+        install_version = 'nightly' if branch == 'master' else f'v{branch.replace("release-", "")}.0'
+        binary_path = compile_at_commit(commit_sha, task_id, install_version)
+        if binary_path is None:
+            tasks[task_id]['results'][index] = {'version': commit_sha, 'status': 'Failure', 'error': '编译失败'}
+            return
+        test_single_version(install_version, sql, expected_sql, other_check, task_id, index, cleanup_after=True,
+                            commit=commit_sha)
+
+    start_index = len(tasks[task_id]['results'])
+    tasks[task_id]['results'].append({})
+    test_a_commit(start_commit_to_test, start_index)
+
+    start_result = tasks[task_id]['results'][start_index]
+    if start_result.get('status') == 'Failure':
+        error_msg = "本范围内无法找到引入问题的pr,请在更早的版本或者commit 范围内查找"
+        tasks[task_id]['log'].append(f"\n❌ 基线检查失败: 起始 Commit {start_commit_to_test[:7]} 已不符合预期。")
+        tasks[task_id]['final_result'] = error_msg
+        tasks[task_id]['status'] = 'complete'
+        return
+
+    # 开始二分测试
     found_commit = commit_binary_search_logic(start_commit, end_commit, branch)
     output = ""
     if found_commit:
@@ -779,9 +835,6 @@ def start_locate():
     sql = data.get('sql')
     expected_sql_result = data.get('expected_sql_result', '').strip()
     other_check_script = data.get('other_check_script', '').strip()
-
-    if not expected_sql_result and not other_check_script:
-        return jsonify({'error': '请输入至少一个预期结果 (SQL 结果或其它检查脚本)。'}), 400
 
     print("收到的预期 SQL 结果:", expected_sql_result)
     print("收到的其他检查脚本:", other_check_script)
