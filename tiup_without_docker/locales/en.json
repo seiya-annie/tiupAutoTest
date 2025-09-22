@@ -36,7 +36,7 @@
   "endCommitPlaceholder": "End commit SHA",
   "commitFieldsAlert": "Please fill in all commit-related fields: Branch, Start Commit, and End Commit.",
   "expectedSqlResultLabel": "Expected SQL Result Check:",
-  "expectedSqlResultPlaceholder": "Enter the expected SQL query result string. If empty, this check is skipped.",
+  "expectedSqlResultPlaceholder": "Enter the expected SQL query result string. If empty, only check whether this sql can be executed successfully.",
   "otherCheckScriptLabel": "Other Checks (Shell Script):",
   "otherCheckScriptPlaceholder": "Enter shell script content. A return code of 0 means success, non-zero means failure. If empty, this check is skipped.",
   "atLeastOneExpectedResult": "Please provide at least one expected result (SQL result or other check script)."

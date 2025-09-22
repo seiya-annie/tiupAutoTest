@@ -173,8 +173,8 @@ function updateResults(data) {
                  content += `Error: ${res.error}\n`;
              } else {
                  content += `SQL Port: ${res.sql_port}, Dashboard Port: ${res.dashboard_port}\n`;
-                 if (res.expected_sql) content += `Expected SQL: ${res.expected_sql}\n`;
-                 if (res.actual_sql) content += `Actual SQL: ${res.actual_sql}\n`;
+                 if (res.expected_sql !== undefined) content += `Expected SQL: ${res.expected_sql}\n`;
+                 if (res.actual_sql !== undefined) content += `Actual SQL: ${res.actual_sql}\n`;
                  if (res.other_check_status) content += `Other Check Status: ${res.other_check_status}\n`;
                  if (res.other_check_output) content += `Other Check Output: ${res.other_check_output}\n`;
              }
@@ -234,11 +234,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const expectedSqlResult = document.getElementById('expected-sql-result').value;
         const otherCheckScript = document.getElementById('other-check-script').value;
-
-        if (!expectedSqlResult.trim() && !otherCheckScript.trim()) {
-            alert(translations[currentLang]?.atLeastOneExpectedResult || '请输入至少一个预期结果。');
-            return;
-        }
 
         disableButtons(true);
         resultBox.textContent = translations[currentLang]?.taskSubmitted || 'Task submitted, initializing...';
