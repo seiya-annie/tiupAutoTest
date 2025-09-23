@@ -61,7 +61,7 @@ tasks = {}
 TIDB_BINARY_PATH = "bin/tidb-server"
 # 编译命令
 COMPILE_COMMAND = "make"
-TIDB_REPO_PATH = '/Users/lt/git/tidb'
+TIDB_REPO_PATH = '/root/git/tidb'
 
 
 # --- commit 二分查找函数 --
