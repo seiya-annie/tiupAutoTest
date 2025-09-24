@@ -134,6 +134,8 @@ def run_command(command, work_dir=".", shell=False, check=True, print_output=Fal
         print(f"❌ 错误: asdf 环境脚本未在 '{asdf_script_path}' 找到。")
         sys.exit(1)
 
+    command_list = command if isinstance(command, list) else command.split()
+
     if go_version:
         print(f"🔧 正在为命令手动设置 Go {go_version} 环境...")
         try:
@@ -148,19 +150,30 @@ def run_command(command, work_dir=".", shell=False, check=True, print_output=Fal
                 raise FileNotFoundError(f"asdf 未能找到 Go {go_version} 的安装路径。")
 
             # 2. 构建 bin 目录路径
-            go_bin_path = os.path.join(go_root_path, "bin")
+            go_bin_path = os.path.join(go_root_path, "go/bin")
 
             # 3. 设置 GOROOT 和 PATH 环境变量
-            custom_env['GOROOT'] = go_root_path
-            custom_env['PATH'] = f"{go_bin_path}:{custom_env.get('PATH', '')}"
-            print(f"✅ 环境已设置: GOROOT={go_root_path}, PATH 将优先使用 {go_bin_path}")
+            custom_env['GOROOT'] = os.path.join(go_root_path, "go")
+            new_path = f"{go_bin_path}:{custom_env.get('PATH', '')}"
+            asdf_shims_path = os.path.expanduser("~/.asdf/shims")
+            path_parts = new_path.split(':')
+            path_parts = [p for p in path_parts if p != asdf_shims_path]
+            custom_env['PATH'] = ':'.join(path_parts)
+            print(f"✅ 环境已设置: GOROOT={go_root_path}, PATH 已更新并移除了 asdf shims。")
+
+            if command_list[0] == 'go':
+                go_executable = os.path.join(go_bin_path, 'go')
+                if not os.path.exists(go_executable):
+                    raise FileNotFoundError(f"Go 可执行文件未在预期路径找到: {go_executable}")
+
+                print(f"🔩 将命令 'go' 替换为绝对路径: {go_executable}")
+                command_list[0] = go_executable
 
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             print(f"❌ 无法为 Go {go_version} 设置环境: {e}")
             # 抛出异常以便 retry 装饰器可以捕获它
             raise RuntimeError(f"为 Go {go_version} 设置环境失败") from e
 
-    command_list = command if isinstance(command, list) else command.split()
     use_shell = isinstance(command, str) and shell
     try:
         process = subprocess.Popen(
