@@ -181,6 +181,7 @@ def run_command(command, work_dir=".", shell=False, check=True, print_output=Fal
             cwd=work_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
             text=True,
             shell=use_shell,
             env=custom_env,  # 使用我们手动创建的环境
@@ -380,6 +381,7 @@ def run_other_check(script_content, port, task_id):
     finally:
         if os.path.exists(script_path):
             os.remove(script_path)
+
 
 def test_single_version(version, sql, expected_sql_result, other_check_script, task_id, index, cleanup_after=False,
                         commit='', binary_path=None):
@@ -684,7 +686,6 @@ def run_binary_search_with_version(start_v_str, end_v_str, sql, expected_sql, ot
         found_commit = commit_binary_search_logic(good_version, found_version, task_repo_path)
         if found_commit:
             output = run_command(["git", "show", found_commit, "--no-patch"], work_dir=task_repo_path)
-
             tasks[task_id][
                 'final_result'] = f"定位到第一个出错的commit是: {found_version}-{found_commit}\n\nCommit Info:\n{output}"
         else:
