@@ -11,6 +11,62 @@ import sys
 import stat
 import ast
 import shutil
+from functools import wraps
+
+
+def retry(max_retries=3, delay=5):
+    """
+    一个装饰器，用于在函数失败时自动重试。
+    失败的条件是：函数抛出任何异常，或者函数返回 None。
+    """
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # 尝试从参数中智能地获取 task_id 用于日志记录
+            task_id = kwargs.get('task_id')
+            if not task_id:
+                for arg in args:
+                    if isinstance(arg, str) and len(arg) > 30:  # 根据 uuid 的特征猜测 task_id
+                        task_id = arg
+                        break
+
+            last_exception = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    result = func(*args, **kwargs)
+                    # 如果函数通过返回 None 来表示失败，我们也将其视为需要重试的失败
+                    if result is not None:
+                        return result
+
+                    log_msg = f"⚠️ 函数 {func.__name__} 第 {attempt}/{max_retries} 次尝试失败，结果为 None。"
+                    if attempt == max_retries:  # 最后一次尝试失败
+                        last_exception = Exception("函数返回 None")
+
+                except Exception as e:
+                    last_exception = e
+                    log_msg = f"❌ 函数 {func.__name__} 第 {attempt}/{max_retries} 次尝试失败，发生异常: {e}"
+
+                # 记录日志
+                print(log_msg)
+                if task_id and task_id in tasks:
+                    tasks[task_id]['log'].append(log_msg)
+
+                if attempt < max_retries:
+                    time.sleep(delay)
+
+            # 所有重试均告失败
+            final_log_msg = f"❌ 函数 {func.__name__} 在 {max_retries} 次尝试后彻底失败。最后一次错误: {last_exception}"
+            print(final_log_msg)
+            if task_id and task_id in tasks:
+                tasks[task_id]['log'].append(final_log_msg)
+
+            return None  # 返回 None 表示最终失败
+
+        return wrapper
+
+    return decorator
+
 
 TIDB_GO_VERSION_MAP = {
     "4.0": "1.13.15",
@@ -71,34 +127,50 @@ def run_command(command, work_dir=".", shell=False, check=True, print_output=Fal
     """
     print(f"🚀 在 '{work_dir}' 中执行: {' '.join(command) if isinstance(command, list) else command}")
 
-    command_str = ' '.join(f"'{arg}'" if ' ' in arg else arg for arg in command) if isinstance(command,
-                                                                                               list) else command
-
+    custom_env = os.environ.copy()
     asdf_script_path = os.path.expanduser("~/.asdf/asdf.sh")
+
     if not os.path.exists(asdf_script_path):
         print(f"❌ 错误: asdf 环境脚本未在 '{asdf_script_path}' 找到。")
         sys.exit(1)
 
-    # 构建 asdf 环境设置命令。如果提供了 go_version，则使用 asdf shell 进行临时切换
-    asdf_setup = f". {asdf_script_path}"
     if go_version:
-        asdf_setup += f" && asdf shell go {go_version}"
+        print(f"🔧 正在为命令手动设置 Go {go_version} 环境...")
+        try:
+            # 1. 使用 asdf where 获取 GOROOT 路径
+            asdf_where_cmd = f". {asdf_script_path} && asdf where go {go_version}"
+            go_root_path = subprocess.check_output(
+                ["/bin/bash", "-li", "-c", asdf_where_cmd],
+                text=True
+            ).strip()
 
-    # 使用 bash -c '...' 来确保在一个 shell 中先 source 再执行命令
-    final_command = f"{asdf_setup} && {command_str}"
-    final_command_list = ["/bin/bash", "-li", "-c", final_command]
+            if not go_root_path or not os.path.exists(go_root_path):
+                raise FileNotFoundError(f"asdf 未能找到 Go {go_version} 的安装路径。")
 
-    if print_output:
-        print(f"🚀 (In Bash with ASDF Env) 在 '{work_dir}' 中执行: {final_command}")
+            # 2. 构建 bin 目录路径
+            go_bin_path = os.path.join(go_root_path, "bin")
 
+            # 3. 设置 GOROOT 和 PATH 环境变量
+            custom_env['GOROOT'] = go_root_path
+            custom_env['PATH'] = f"{go_bin_path}:{custom_env.get('PATH', '')}"
+            print(f"✅ 环境已设置: GOROOT={go_root_path}, PATH 将优先使用 {go_bin_path}")
+
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            print(f"❌ 无法为 Go {go_version} 设置环境: {e}")
+            # 抛出异常以便 retry 装饰器可以捕获它
+            raise RuntimeError(f"为 Go {go_version} 设置环境失败") from e
+
+    command_list = command if isinstance(command, list) else command.split()
+    use_shell = isinstance(command, str) and shell
     try:
         process = subprocess.Popen(
-            final_command_list,
+            command if use_shell else command_list,
             cwd=work_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            shell=shell,  # shell=False is generally safer
+            shell=use_shell,
+            env=custom_env,  # 使用我们手动创建的环境
             preexec_fn=os.setsid if sys.platform != "win32" else None
         )
 
@@ -115,14 +187,18 @@ def run_command(command, work_dir=".", shell=False, check=True, print_output=Fal
             full_output = process.stdout.read()
 
         if check and process.returncode != 0:
-            print("compile fail:", process.stderr)
-            raise subprocess.CalledProcessError(process.returncode, command)
+            raise subprocess.CalledProcessError(process.returncode, command, output=full_output)
 
         return full_output
     except FileNotFoundError:
         command_name = command[0] if isinstance(command, list) else command.split()[0]
         print(f"❌ 命令未找到: {command_name}. 请确保它已安装并在您的 PATH 中。")
         sys.exit(1)
+    except subprocess.CalledProcessError as e:
+        print(f"❌ 命令执行失败，返回码: {e.returncode}")
+        print(f"   命令: {e.cmd}")
+        print(f"   输出:\n{e.output}")
+        raise
 
 
 def get_commit_list(start_tag, end_tag, task_id, repo_path):
@@ -151,7 +227,7 @@ def get_commit_list(start_tag, end_tag, task_id, repo_path):
         tasks[task_id]['log'].append(f"❌ 获取 commits 列表失败: {e}")
         return None
 
-
+@retry(max_retries=3)
 def compile_at_commit(commit_sha, task_id, version, repo_path):
     """在指定的隔离 repo_path 中 Checkout 到指定 commit 并进行编译"""
     tasks[task_id]['log'].append(f"\n🔧 在 '{repo_path}' 中切换到 commit: {commit_sha[:8]} 并开始编译...")
@@ -257,6 +333,8 @@ def run_other_check(script_content, port, task_id):
         data_list = ast.literal_eval(result)
         log_file_path = data_list[0][3]
         base_dir = os.path.dirname(os.path.dirname(log_file_path))
+        tasks[task_id]['log'].append(f"✅ 成功获取到tidb日志目录: {log_file_path}")
+        tasks[task_id]['log'].append(f"✅ 脚本将会在此基础目录执行: {base_dir}")
     except Exception as e:
         msg = f"解析 TiDB 日志目录时出错: {e}"
         tasks[task_id]['log'].append(f"❌ {msg}")
@@ -269,14 +347,18 @@ def run_other_check(script_content, port, task_id):
             f.write(script_content)
         st = os.stat(script_path)
         os.chmod(script_path, st.st_mode | stat.S_IEXEC)
+        tasks[task_id]['log'].append(f"✅ 检查脚本已保存到: {script_path}")
+        tasks[task_id]['log'].append(f"🚀 执行检查脚本...")
         process = subprocess.run(
             ['/bin/bash', script_path], capture_output=True, text=True, timeout=120, cwd=base_dir
         )
         script_output = process.stdout.strip() + "\n" + process.stderr.strip()
         tasks[task_id]['log'].append(f"脚本输出:\n{script_output}")
         if process.returncode == 0:
+            tasks[task_id]['log'].append("✅ 其他检查通过 (脚本返回值为 0)。")
             return "Success", script_output
         else:
+            tasks[task_id]['log'].append(f"❌ 其他检查失败 (脚本返回值为 {process.returncode})。")
             return "Failure", script_output
     except Exception as e:
         msg = f"执行检查脚本时发生严重错误: {e}"
@@ -289,61 +371,86 @@ def run_other_check(script_content, port, task_id):
 
 def test_single_version(version, sql, expected_sql_result, other_check_script, task_id, index, cleanup_after=False,
                         commit='', binary_path=None):
-    """
-    使用 tiup playground 启动一个 TiDB 集群并执行测试
-    新增 binary_path 参数以接收编译好的二进制文件路径
-    """
     port_offset = random.randint(10000, 30000)
     sql_port = 4000 + port_offset
+    dashboard_port = 2379 + port_offset
     log_dir = "logs"
     os.makedirs(log_dir, exist_ok=True)
     log_filename = f"{log_dir}/task_{task_id[:8]}_{version}_{commit[:7] if commit else ''}.log"
 
     log_message = f"版本 {version}" + (f" (commit {commit[:7]})" if commit else "")
     tasks[task_id]['log'].append(f"{log_message}: 准备启动集群 (SQL Port: {sql_port})...")
-
+    result_data = {'version': f"{version}-{commit}" if commit else version}
     process = None
     log_file = None
+    startup_success = False
+    MAX_STARTUP_RETRIES = 3
 
-    result_data = {'version': f"{version}-{commit}" if commit else version}
+    for attempt in range(1, MAX_STARTUP_RETRIES + 1):
+        log_file = None
+        try:
+            # 清理上一次失败的进程
+            if process and process.poll() is None:
+                process.terminate()
+                process.wait(timeout=10)
 
-    try:
-        log_file = open(log_filename, 'w', encoding='utf-8')
-        # 如果提供了 binary_path (来自编译)，则使用 --db.binpath 启动
-        if commit and binary_path:
-            cmd = ['tiup', 'playground', f'--db.binpath={binary_path}', version, f'--port-offset={port_offset}',
+            log_file = open(log_filename, 'w', encoding='utf-8')
+            # 如果提供了 binary_path (来自编译)，则使用 --db.binpath 启动
+            if commit and binary_path:
+                cmd = ['tiup', 'playground', f'--db.binpath={binary_path}', version, f'--port-offset={port_offset}',
                    '--without-monitor', '--kv', str(COMPONENT_COUNTS['tikv']), '--tiflash',
                    str(COMPONENT_COUNTS['tiflash']),
                    '--pd', str(COMPONENT_COUNTS['pd']), '--db', str(COMPONENT_COUNTS['tidb'])]
-        else:
-            cmd = ['tiup', 'playground', version, f'--port-offset={port_offset}', '--without-monitor',
+            else:
+                cmd = ['tiup', 'playground', version, f'--port-offset={port_offset}', '--without-monitor',
                    '--kv', str(COMPONENT_COUNTS['tikv']), '--tiflash', str(COMPONENT_COUNTS['tiflash']),
                    '--pd', str(COMPONENT_COUNTS['pd']), '--db', str(COMPONENT_COUNTS['tidb'])]
 
-        process = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, text=True, encoding='utf-8')
+            process = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, text=True, encoding='utf-8')
+            if attempt == 1:
+                tasks[task_id]['processes'].append(
+                    {'version': version, 'process': process, 'offset': port_offset, 'log_file': log_filename})
+
+            tasks[task_id]['log'].append(
+            f"{log_message}: 集群启动尝试 {attempt}/{MAX_STARTUP_RETRIES} (PID: {process.pid}, SQL Port: {sql_port})...")
+
+            ready = False
+            for _ in range(36):  # Wait up to 180 seconds
+                time.sleep(5)
+                try:
+                    conn = mysql.connector.connect(host='127.0.0.1', port=sql_port, user='root', password='',
+                                               connection_timeout=5)
+                    conn.close()
+                    ready = True
+                    tasks[task_id]['log'].append(f"✅ {log_message}: TiDB 服务在端口 {sql_port} 上已就绪。")
+                    break
+                except mysql.connector.Error:
+                    if process.poll() is not None:
+                        raise Exception(f"TiUP 进程意外退出。请检查日志: {log_filename}")
+            if not ready:
+                raise Exception("TiDB 服务启动超时")
+            startup_success = True
+            break  # 成功，跳出重试循环
+        except Exception as e:
+            error_msg = f"❌ 集群启动尝试 {attempt}/{MAX_STARTUP_RETRIES} 失败: {e}"
+            tasks[task_id]['log'].append(error_msg)
+            if log_file: log_file.close()
+            if attempt < MAX_STARTUP_RETRIES:
+                time.sleep(5)
+            else:  # 所有重试失败
+                result_data = {'version': version, 'status': 'Failure',
+                               'error': f"集群启动在 {MAX_STARTUP_RETRIES} 次尝试后失败: {e}"}
+                tasks[task_id]['results'][index] = result_data
+                if process: process.terminate()
+                return  # 退出函数
+        finally:
+            if log_file: log_file.close()
+
         tasks[task_id]['processes'].append(
             {'version': version, 'process': process, 'offset': port_offset, 'log_file': log_filename})
         tasks[task_id]['log'].append(f"{log_message}: 集群进程已启动 (PID: {process.pid})，等待服务就绪...")
 
-        # 等待 TiDB 准备就绪
-        ready = False
-        for _ in range(36):  # Wait up to 180 seconds
-            time.sleep(5)
-            try:
-                conn = mysql.connector.connect(host='127.0.0.1', port=sql_port, user='root', password='',
-                                               connection_timeout=5)
-                conn.close()
-                ready = True
-                tasks[task_id]['log'].append(f"{log_message}: TiDB 服务在端口 {sql_port} 上已就绪。")
-                break
-            except mysql.connector.Error:
-                if process.poll() is not None:
-                    raise Exception(f"TiUP 进程意外退出。请检查日志: {log_filename}")
-                continue
-
-        if not ready:
-            raise Exception("TiDB 服务启动超时")
-
+    try:
         if commit:
             v_result, success = run_sql_on_tidb('select tidb_version();', sql_port)
             if not success or commit not in ''.join(v_result.split()):
@@ -384,8 +491,6 @@ def test_single_version(version, sql, expected_sql_result, other_check_script, t
         tasks[task_id]['log'].append(f"❌ {error_msg}")
         result_data = {'version': version, 'status': 'Failure', 'error': str(e)}
     finally:
-        if log_file:
-            log_file.close()
         if cleanup_after and process:
             tasks[task_id]['log'].append(f"{log_message}: 测试完成，清理集群 (PID: {process.pid})...")
             process.terminate()
