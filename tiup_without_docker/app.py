@@ -57,7 +57,7 @@ tasks = {}
 TIDB_BINARY_PATH = "bin/tidb-server"  # TiDB 编译后的二进制文件相对路径
 COMPILE_COMMAND = "make"  # 编译命令
 # 核心代码仓库路径（作为 worktree 的源）
-TIDB_REPO_PATH = '/Users/lt/git/tidb'
+TIDB_REPO_PATH = '/root/git/tidb'
 # 为并发任务创建隔离工作区的基准目录
 # **重要**: 确保此目录存在且 Flask 应用有权读写
 TIDB_WORKTREE_BASE = '/tmp/tidb_worktrees'
