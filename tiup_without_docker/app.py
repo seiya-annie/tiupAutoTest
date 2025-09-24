@@ -181,6 +181,7 @@ def run_command(command, work_dir=".", shell=False, check=True, print_output=Fal
             cwd=work_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
             text=True,
             shell=use_shell,
             env=custom_env,  # 使用我们手动创建的环境
