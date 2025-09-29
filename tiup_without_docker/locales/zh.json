@@ -32,7 +32,7 @@
   "tidbBranchPlaceholder": "例如: release-8.5",
   "startCommitLabel": "起始 Commit:",
   "startCommitPlaceholder": "Start Commit SHA",
-  "endCommitLabel": "结束 Commit:",
+  "endCommitLabel": "Bug 上报 Commit:",
   "endCommitPlaceholder": "End Commit SHA",
   "commitFieldsAlert": "请填写所有与 Commit 相关的字段：分支、起始Commit和结束Commit。",
   "expectedSqlResultLabel": "预期 SQL 结果检查:",

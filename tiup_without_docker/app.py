@@ -181,6 +181,7 @@ def run_command(command, work_dir=".", shell=False, check=True, print_output=Fal
             cwd=work_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
             text=True,
             shell=use_shell,
             env=custom_env,  # 使用我们手动创建的环境
@@ -223,6 +224,10 @@ def get_commit_list(start_tag, end_tag, task_id, repo_path):
         branch_name = f"release-{branch_version}"
         run_command(["git", "checkout", "-f", branch_name], work_dir=repo_path)
         tasks[task_id]['log'].append(f"✅ 成功切换到分支: {branch_name}")
+
+        tasks[task_id]['log'].append(f"🔄 正在更新仓库代码...")
+        run_command(["git", "pull"], work_dir=repo_path, print_output=True)
+        tasks[task_id]['log'].append(f"✅ 仓库代码已更新。")
     except IndexError:
         tasks[task_id]['log'].append(f"⚠️ 警告: 无法从 tag '{end_tag}' 推断出 release 分支名。")
     except subprocess.CalledProcessError:
@@ -251,6 +256,7 @@ def compile_at_commit(commit_sha, task_id, version, repo_path):
             version_key = ".".join(version.lstrip('v').split('.')[:2])
             go_version = TIDB_GO_VERSION_MAP.get(version_key, DEFAULT_GO_VERSION)
 
+        tasks[task_id]['log'].append(f"🔀 切换到 commit: {commit_sha[:8]}...")
         run_command(["git", "checkout", "-f", commit_sha], work_dir=repo_path)
         tasks[task_id]['log'].append(f"✅ Git checkout 成功。")
 
@@ -380,7 +386,6 @@ def run_other_check(script_content, port, task_id):
     finally:
         if os.path.exists(script_path):
             os.remove(script_path)
-
 
 def test_single_version(version, sql, expected_sql_result, other_check_script, task_id, index, cleanup_after=False,
                         commit='', binary_path=None):
@@ -646,27 +651,27 @@ def run_binary_search_with_version(start_v_str, end_v_str, sql, expected_sql, ot
 
         # --- 执行流程 ---
         # # 1. 基线检查
-        # tasks[task_id]['log'].append(f"\n--- 正在执行基线检查: {start_v_str} ---")
-        # start_index = len(tasks[task_id]['results'])
-        # tasks[task_id]['results'].append({})
-        # test_single_version(start_v_str, sql, expected_sql, other_check, task_id, start_index, cleanup_after=True)
-        # start_result = tasks[task_id]['results'][start_index]
-        # if start_result.get('status') == 'Failure':
-        #     tasks[task_id]['log'].append(f"\n❌ 基线检查失败: 起始版本 {start_v_str} 已不符合预期。")
-        #     tasks[task_id]['final_result'] = "本范围内无法找到引入问题的pr,请在更早的版本或者 commit 范围内查找"
-        #     return
+        tasks[task_id]['log'].append(f"\n--- 正在执行基线检查: {start_v_str} ---")
+        start_index = len(tasks[task_id]['results'])
+        tasks[task_id]['results'].append({})
+        test_single_version(start_v_str, sql, expected_sql, other_check, task_id, start_index, cleanup_after=True)
+        start_result = tasks[task_id]['results'][start_index]
+        if start_result.get('status') == 'Failure':
+            tasks[task_id]['log'].append(f"\n❌ 基线检查失败: 起始版本 {start_v_str} 已不符合预期。")
+            tasks[task_id]['final_result'] = "本范围内无法找到引入问题的pr,请在更早的版本或者 commit 范围内查找"
+            return
         #
         # # 2. 健全性检查
-        # tasks[task_id]['log'].append(f"\n--- 正在执行健全性检查: {end_v_str} ---")
-        # end_index = len(tasks[task_id]['results'])
-        # tasks[task_id]['results'].append({})
-        # test_single_version(end_v_str, sql, expected_sql, other_check, task_id, end_index, cleanup_after=True)
-        # end_result = tasks[task_id]['results'][end_index]
-        # if end_result.get('status') == 'Success':
-        #     error_msg = f"健全性检查失败: 'Bug 上报版本' ({end_v_str}) 的测试结果为成功，无法进行二分查找。"
-        #     tasks[task_id]['log'].append(f"\n❌ {error_msg}")
-        #     tasks[task_id]['final_result'] = error_msg
-        #     return
+        tasks[task_id]['log'].append(f"\n--- 正在执行健全性检查: {end_v_str} ---")
+        end_index = len(tasks[task_id]['results'])
+        tasks[task_id]['results'].append({})
+        test_single_version(end_v_str, sql, expected_sql, other_check, task_id, end_index, cleanup_after=True)
+        end_result = tasks[task_id]['results'][end_index]
+        if end_result.get('status') == 'Success':
+            error_msg = f"健全性检查失败: 'Bug 上报版本' ({end_v_str}) 的测试结果为成功，无法进行二分查找。"
+            tasks[task_id]['log'].append(f"\n❌ {error_msg}")
+            tasks[task_id]['final_result'] = error_msg
+            return
 
         # 3. 开始版本二分查找
         found_version = binary_search_logic(start_v_str, end_v_str)
@@ -685,6 +690,7 @@ def run_binary_search_with_version(start_v_str, end_v_str, sql, expected_sql, ot
         found_commit = commit_binary_search_logic(good_version, found_version, task_repo_path)
         if found_commit:
             output = run_command(["git", "show", found_commit, "--no-patch"], work_dir=task_repo_path)
+
             tasks[task_id][
                 'final_result'] = f"定位到第一个出错的commit是: {found_version}-{found_commit}\n\nCommit Info:\n{output}"
         else:
@@ -716,6 +722,10 @@ def run_binary_search_with_commit(start_commit, end_commit, branch, sql, expecte
         os.makedirs(TIDB_WORKTREE_BASE, exist_ok=True)
         run_command(["git", "worktree", "add", "-f", task_repo_path, branch], work_dir=TIDB_REPO_PATH)
         tasks[task_id]['log'].append(f"✅ Git worktree 创建成功，基于分支 {branch}。")
+
+        tasks[task_id]['log'].append(f"🔄 正在更新仓库代码...")
+        run_command(["git", "pull"], work_dir=task_repo_path, print_output=True)
+        tasks[task_id]['log'].append(f"✅ 仓库代码已更新。")
 
         # --- 内部函数 ---
         def commit_binary_search_logic(repo_path):
@@ -755,27 +765,40 @@ def run_binary_search_with_commit(start_commit, end_commit, branch, sql, expecte
                     return None
             return first_bad_commit
 
-        # def test_a_commit(commit_sha, index, repo_path):
-        #     install_version = 'nightly' if branch == 'master' else f'v{branch.replace("release-", "")}.0'
-        #     binary_path = compile_at_commit(commit_sha, task_id, install_version, repo_path)
-        #     if binary_path is None:
-        #         tasks[task_id]['results'][index] = {'version': commit_sha, 'status': 'Failure', 'error': '编译失败'}
-        #         return
-        #     test_single_version(install_version, sql, expected_sql, other_check, task_id, index, cleanup_after=True,
-        #                         commit=commit_sha, binary_path=binary_path)
+        def test_a_commit(commit_sha, index, repo_path):
+            install_version = 'nightly' if branch == 'master' else f'v{branch.replace("release-", "")}.0'
+            binary_path = compile_at_commit(commit_sha, task_id, install_version, repo_path)
+            if binary_path is None:
+                tasks[task_id]['results'][index] = {'version': commit_sha, 'status': 'Failure', 'error': '编译失败'}
+                return
+            test_single_version(install_version, sql, expected_sql, other_check, task_id, index, cleanup_after=True,
+                                commit=commit_sha, binary_path=binary_path)
 
         # --- 执行流程 ---
         # 1. 基线检查
-        # tasks[task_id]['log'].append(f"\n--- 正在执行基线检查 (起始 Commit): {start_commit[:7]} ---")
-        # start_index = len(tasks[task_id]['results'])
-        # tasks[task_id]['results'].append({})
-        # test_a_commit(start_commit, start_index, task_repo_path)
-        #
-        # start_result = tasks[task_id]['results'][start_index]
-        # if start_result.get('status') == 'Failure':
-        #     tasks[task_id]['log'].append(f"\n❌ 基线检查失败: 起始 Commit {start_commit[:7]} 已不符合预期。")
-        #     tasks[task_id]['final_result'] = "本范围内无法找到引入问题的pr,请在更早的版本或者commit 范围内查找"
-        #     return
+        tasks[task_id]['log'].append(f"\n--- 正在执行基线检查 (起始 Commit): {start_commit[:7]} ---")
+        start_index = len(tasks[task_id]['results'])
+        tasks[task_id]['results'].append({})
+        test_a_commit(start_commit, start_index, task_repo_path)
+
+        start_result = tasks[task_id]['results'][start_index]
+        if start_result.get('status') == 'Failure':
+            tasks[task_id]['log'].append(f"\n❌ 基线检查失败: 起始 Commit {start_commit[:7]} 已不符合预期。")
+            tasks[task_id]['final_result'] = "本范围内无法找到引入问题的pr,请在更早的版本或者commit 范围内查找"
+            return
+
+        # 2. 检查结束commit
+        tasks[task_id]['log'].append(f"\n--- 正在执行健全性检查: {end_commit[:7]} ---")
+        end_index = len(tasks[task_id]['results'])
+        tasks[task_id]['results'].append({})
+        test_a_commit(end_commit, end_index, task_repo_path)
+
+        end_result = tasks[task_id]['results'][end_index]
+        if end_result.get('status') == 'Success':
+            error_msg = f"健全性检查失败: 'Bug 上报commit' ({end_commit}) 的测试结果为成功，无法进行二分查找。"
+            tasks[task_id]['log'].append(f"\n❌ {error_msg}")
+            tasks[task_id]['final_result'] = error_msg
+            return
 
         # 2. 开始二分查找
         found_commit = commit_binary_search_logic(task_repo_path)
