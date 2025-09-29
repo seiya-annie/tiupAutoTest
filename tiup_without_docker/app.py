@@ -503,7 +503,7 @@ def test_single_version(version, sql, expected_sql_result, other_check_script, t
         if sql_check_passed is False or other_check_passed is False:
             final_status = "Failure"
 
-        result_data.update({'status': final_status, 'sql_port': sql_port})
+        result_data.update({'status': final_status, 'sql_port': sql_port, 'dashboard_port': dashboard_port})
     except Exception as e:
         error_msg = f"测试 {log_message} 时发生错误: {e}"
         tasks[task_id]['log'].append(f"❌ {error_msg}")
