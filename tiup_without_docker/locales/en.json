@@ -32,7 +32,7 @@
   "tidbBranchPlaceholder": "e.g., release-8.5",
   "startCommitLabel": "Start Commit:",
   "startCommitPlaceholder": "Start commit SHA",
-  "endCommitLabel": "End Commit:",
+  "endCommitLabel": "Bug Report Commit:",
   "endCommitPlaceholder": "End commit SHA",
   "commitFieldsAlert": "Please fill in all commit-related fields: Branch, Start Commit, and End Commit.",
   "expectedSqlResultLabel": "Expected SQL Result Check:",
