@@ -3,6 +3,8 @@ import subprocess
 import random
 import time
 import threading
+import csv
+import datetime
 from uuid import uuid4
 from flask import Flask, render_template, request, jsonify, session, send_from_directory
 from packaging.version import Version
@@ -117,6 +119,8 @@ TIDB_REPO_PATH = '/root/git/tidb'
 # 为并发任务创建隔离工作区的基准目录
 # **重要**: 确保此目录存在且 Flask 应用有权读写
 TIDB_WORKTREE_BASE = '/tmp/tidb_worktrees'
+# 历史记录文件路径
+HISTORY_LOG_FILE = 'search_history.csv'
 
 
 # --- commit 二分查找函数 --
@@ -140,7 +144,7 @@ def run_command(command, work_dir=".", shell=False, check=True, print_output=Fal
         print(f"🔧 正在为命令手动设置 Go {go_version} 环境...")
         try:
             # 1. 使用 asdf where 获取 GOROOT 路径
-            asdf_where_cmd = f". {asdf_script_path} && asdf where go {go_version}"
+            asdf_where_cmd = f". {asdf_script_path} && asdf where golang {go_version}"
             go_root_path = subprocess.check_output(
                 ["/bin/bash", "-li", "-c", asdf_where_cmd],
                 text=True
@@ -307,7 +311,7 @@ def get_tidb_versions():
         return versions
     except Exception as e:
         print(f"获取 TiDB 版本失败: {e}")
-        return ["v8.1.0", "v8.0.0", "v7.5.1", "v7.1.3", "v6.5.9", "v6.1.7", "v5.4.3", "v4.0.16"]
+        return ["v8.5.2","v8.1.0", "v8.0.0", "v7.5.1", "v7.1.3", "v6.5.9", "v6.1.7", "v5.4.3", "v4.0.16"]
 
 
 def run_sql_on_tidb(sql, port):
@@ -321,7 +325,8 @@ def run_sql_on_tidb(sql, port):
             password='',
             database='test',
             autocommit=True,
-            connection_timeout=20
+            connection_timeout=20,
+            allow_local_infile=True
         )
         cursor = conn.cursor()
         for stmt in sql.split(';'):
@@ -387,6 +392,38 @@ def run_other_check(script_content, port, task_id):
         if os.path.exists(script_path):
             os.remove(script_path)
 
+def write_search_history(task_id, sql, expected, found_version, found_commit, final_result_msg):
+    """
+    将定位结果写入 CSV 日志文件
+    """
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    file_exists = os.path.isfile(HISTORY_LOG_FILE)
+    
+    # 将包含换行符的字段处理一下，避免 CSV 格式混乱 (虽然 CSV 标准支持换行，但单行更易读)
+    sql_clean = sql.replace('\n', ' ').strip()
+    expected_clean = expected.replace('\n', ' ').strip()
+    result_clean = final_result_msg.replace('\n', ' | ').strip()
+
+    try:
+        with open(HISTORY_LOG_FILE, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                # 写入表头
+                writer.writerow(['Timestamp', 'Task ID', 'Test Case (SQL)', 'Expected Result', 'Error Version', 'Error Commit', 'Full Result Message'])
+            
+            writer.writerow([
+                timestamp,
+                task_id,
+                sql_clean,
+                expected_clean,
+                found_version if found_version else "N/A",
+                found_commit if found_commit else "N/A",
+                result_clean
+            ])
+        print(f"✅ 历史记录已写入: {HISTORY_LOG_FILE}")
+    except Exception as e:
+        print(f"❌ 写入历史记录失败: {e}")
+
 def test_single_version(version, sql, expected_sql_result, other_check_script, task_id, index, cleanup_after=False,
                         commit='', binary_path=None):
     port_offset = random.randint(10000, 30000)
@@ -424,6 +461,7 @@ def test_single_version(version, sql, expected_sql_result, other_check_script, t
                    '--kv', str(COMPONENT_COUNTS['tikv']), '--tiflash', str(COMPONENT_COUNTS['tiflash']),
                    '--pd', str(COMPONENT_COUNTS['pd']), '--db', str(COMPONENT_COUNTS['tidb'])]
 
+            print("tiup install cmd:",cmd)
             process = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, text=True, encoding='utf-8')
             if attempt == 1:
                 tasks[task_id]['processes'].append(
@@ -433,26 +471,55 @@ def test_single_version(version, sql, expected_sql_result, other_check_script, t
             f"{log_message}: 集群启动尝试 {attempt}/{MAX_STARTUP_RETRIES} (PID: {process.pid}, SQL Port: {sql_port})...")
 
             ready = False
-            for _ in range(36):  # Wait up to 180 seconds
-                time.sleep(5)
-                try:
-                    conn = mysql.connector.connect(host='127.0.0.1', port=sql_port, user='root', password='',
-                                               connection_timeout=5)
-                    conn.close()
-                    ready = True
-                    tasks[task_id]['log'].append(f"✅ {log_message}: TiDB 服务在端口 {sql_port} 上已就绪。")
-                    break
-                except mysql.connector.Error:
-                    if process.poll() is not None:
-                        raise Exception(f"TiUP 进程意外退出。请检查日志: {log_filename}")
+            start_wait_time = time.time()
+
+            # 等待文件有内容写入，稍作缓冲
+            time.sleep(1)
+            try:
+                with open(log_filename, 'r', encoding='utf-8') as reader:
+                    while True:
+                        # 1. 超时检查 (180秒)
+                        if time.time() - start_wait_time > 300:
+                            break
+
+                        # 2. 检查进程是否意外退出
+                        if process.poll() is not None:
+                            # 进程已死，抛出异常以触发重试
+                            raise Exception(
+                                f"TiUP 进程意外退出 (Return Code: {process.returncode})。请检查日志: {log_filename}")
+
+                        # 3. 读取日志行
+                        line = reader.readline()
+                        if not line:
+                            time.sleep(0.5)  # 文件末尾，等待新日志写入
+                            continue
+
+                        # 4. 检查 Ready 信号
+                        if "TiDB Playground Cluster is started, enjoy!" in line:
+                            ready = True
+                            tasks[task_id]['log'].append(f"✅ {log_message}: 检测到 Ready 信号，集群已完全启动。")
+                            tasks[task_id]['processes'].append(
+                                {'version': version, 'process': process, 'offset': port_offset,
+                                 'log_file': log_filename})
+                            break
+            except FileNotFoundError:
+                # 极少数情况下文件可能还没生成
+                time.sleep(1)
+
             if not ready:
-                raise Exception("TiDB 服务启动超时")
+                raise Exception("TiDB 服务启动超时 (未检测到 'started' 信号)")
+
             startup_success = True
             break  # 成功，跳出重试循环
+
         except Exception as e:
             error_msg = f"❌ 集群启动尝试 {attempt}/{MAX_STARTUP_RETRIES} 失败: {e}"
             tasks[task_id]['log'].append(error_msg)
-            if log_file: log_file.close()
+
+            # 确保关闭写入句柄
+            if log_file and not log_file.closed:
+                log_file.close()
+
             if attempt < MAX_STARTUP_RETRIES:
                 time.sleep(5)
             else:  # 所有重试失败
@@ -461,12 +528,19 @@ def test_single_version(version, sql, expected_sql_result, other_check_script, t
                 tasks[task_id]['results'][index] = result_data
                 if process: process.terminate()
                 return  # 退出函数
-        finally:
-            if log_file: log_file.close()
 
-        tasks[task_id]['processes'].append(
-            {'version': version, 'process': process, 'offset': port_offset, 'log_file': log_filename})
-        tasks[task_id]['log'].append(f"{log_message}: 集群进程已启动 (PID: {process.pid})，等待服务就绪...")
+        finally:
+            # 确保在函数退出或循环结束时关闭 Popen 使用的写入句柄
+            # 注意：如果 process 还在运行，Python 的 Popen 对象会持有这个 fd，
+            # 但我们在 Python 侧显式 close 是好习惯，OS 会处理引用计数。
+            # 不过在 retry 循环中，需要在 except/finally 里小心处理。
+            # 这里我们在循环尾部不强制 close，让 process 持有，
+            # 但如果失败重试，上面的 try 开头会 terminate process，那时应该释放。
+            pass
+
+    # 循环结束后，保持 process 运行，log_file 句柄由 process 持有 (Python 侧变量可关闭)
+    if log_file and not log_file.closed:
+        log_file.close()
 
     try:
         if commit:
@@ -576,6 +650,9 @@ def start_test():
 def run_binary_search_with_version(start_v_str, end_v_str, sql, expected_sql, other_check, task_id):
     """二分查找逻辑，现在包含隔离环境的创建和清理"""
     task_repo_path = os.path.join(TIDB_WORKTREE_BASE, task_id)
+    # 用于记录最终结果的变量
+    found_version = None
+    found_commit = None
 
     try:
         # --- 创建隔离环境 ---
@@ -700,6 +777,17 @@ def run_binary_search_with_version(start_v_str, end_v_str, sql, expected_sql, ot
         tasks[task_id]['log'].append(f"❌ 二分查找过程中发生严重错误: {e}")
         tasks[task_id]['status'] = 'error'
     finally:
+        try:
+            write_search_history(
+                task_id,
+                sql,
+                expected_sql,
+                found_version,
+                found_commit,
+                tasks[task_id].get('final_result', 'N/A')
+            )
+        except Exception:
+            pass
         # --- 清理隔离环境 ---
         if os.path.exists(task_repo_path):
             tasks[task_id]['log'].append(f"清理任务 {task_id} 的工作目录: {task_repo_path}")
@@ -715,6 +803,8 @@ def run_binary_search_with_version(start_v_str, end_v_str, sql, expected_sql, ot
 def run_binary_search_with_commit(start_commit, end_commit, branch, sql, expected_sql, other_check, task_id):
     """二分查找逻辑，现在包含隔离环境的创建和清理"""
     task_repo_path = os.path.join(TIDB_WORKTREE_BASE, task_id)
+    # 用于记录最终结果的变量
+    found_commit = None
 
     try:
         # --- 创建隔离环境 ---
@@ -813,6 +903,19 @@ def run_binary_search_with_commit(start_commit, end_commit, branch, sql, expecte
         tasks[task_id]['log'].append(f"❌ 二分查找过程中发生严重错误: {e}")
         tasks[task_id]['status'] = 'error'
     finally:
+        # --- 记录历史日志 ---
+        try:
+            write_search_history(
+                task_id, 
+                sql, 
+                expected_sql, 
+                "Commit Mode", # 版本模式下没有版本号
+                found_commit, 
+                tasks[task_id].get('final_result', 'N/A')
+            )
+        except Exception:
+            pass
+
         # --- 清理隔离环境 ---
         if os.path.exists(task_repo_path):
             tasks[task_id]['log'].append(f"清理任务 {task_id} 的工作目录: {task_repo_path}")
